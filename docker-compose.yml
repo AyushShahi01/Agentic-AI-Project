@@ -1,0 +1,64 @@
+# Local infrastructure for Agentic Data Automation.
+#
+#   docker compose up -d postgres                  # PostgreSQL only
+#   docker compose up -d postgres airflow3         # + Airflow 3.x on http://localhost:8080
+#   docker compose --profile airflow2 up -d        # + Airflow 2.x on http://localhost:8081
+#
+# Airflow credentials (both versions): admin / admin  -- local development only.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentic_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agentic_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  airflow3:
+    image: apache/airflow:3.1.0
+    command: standalone
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "true"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/airflow3
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_passwords.json
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/airflow/simple_auth_passwords.json:/opt/airflow/simple_auth_passwords.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow2:
+    image: apache/airflow:2.10.5
+    profiles: ["airflow2"]
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create --username admin --password admin --firstname Admin
+                 --lastname User --role Admin --email admin@example.com || true;
+               airflow standalone"
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "true"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/airflow2
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

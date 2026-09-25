@@ -1,0 +1,432 @@
+import {
+  Background,
+  Controls,
+  MarkerType,
+  MiniMap,
+  ReactFlow,
+  ReactFlowProvider,
+  useEdgesState,
+  useNodesState,
+  useReactFlow,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+import '../../components/flow/FlowCanvas.css'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router'
+import { Alert, Badge, Button, EmptyState, Toggle } from '../../components/ui'
+import { useAuth } from '../../context/AuthContext'
+import { useToast } from '../../context/ToastContext'
+import { airflowApi, automationApi, incidentsApi } from '../../services/endpoints'
+import { ConnectionNode, DagNode, MonitorNode, WorkflowNode } from './pipelineNodes'
+import { attachBody, buildPipeline, detachBody } from './pipelineModel'
+
+const NODE_TYPES = { conn: ConnectionNode, dag: DagNode, monitor: MonitorNode, workflow: WorkflowNode }
+const DRAG_TYPE = 'application/x-monitor-block'
+const EDGE_OPTIONS = { markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } }
+const MONITORS = [
+  { kind: 'failure', icon: '⚠', label: 'Failure monitor', hint: 'Incident when a run fails' },
+  { kind: 'sla', icon: '⏱', label: 'Freshness SLA', hint: 'Incident when no run succeeds in time' },
+]
+
+function SlaEditor({ dag, onSave, disabled }) {
+  const [minutes, setMinutes] = useState(dag.sla_minutes ?? 60)
+  const valid = Number.isInteger(minutes) && minutes >= 5 && minutes <= 10080
+  return (
+    <div className="field">
+      <label htmlFor="sla-minutes">Latest success must be within (minutes)</label>
+      <div className="inline-field">
+        <input
+          id="sla-minutes"
+          type="number"
+          min={5}
+          max={10080}
+          value={minutes}
+          disabled={disabled}
+          onChange={(e) => setMinutes(Number(e.target.value))}
+        />
+        <Button size="sm" disabled={disabled || !valid || minutes === dag.sla_minutes} onClick={() => onSave(minutes)}>
+          Save
+        </Button>
+      </div>
+      <small className="field-hint">5–10080 minutes</small>
+    </div>
+  )
+}
+
+function Panel({ node, canEdit, busy, onAttach, onDetach, onSetSla, onRemoveDraft, showUnmonitored, setShowUnmonitored }) {
+  if (!node) {
+    return (
+      <>
+        <strong>Pipelines</strong>
+        <p className="muted small">
+          Each Airflow connection feeds its DAGs. Monitor blocks attached to a DAG open incidents, and incidents start
+          the automation workflows they are wired to.
+        </p>
+        {canEdit && (
+          <p className="muted small">
+            To add monitoring, drag a monitor block onto the canvas, then drag from a DAG&apos;s right edge to it. Select
+            a monitor and press Delete to remove it.
+          </p>
+        )}
+        <div className="checkbox-inline">
+          <Toggle checked={showUnmonitored} onChange={setShowUnmonitored} label="Show unmonitored DAGs" />
+          <span className="small">Show unmonitored DAGs</span>
+        </div>
+      </>
+    )
+  }
+  const { data } = node
+  if (node.type === 'conn') {
+    return (
+      <>
+        <strong>{data.conn.name}</strong>
+        <p className="muted small">
+          {data.conn.environment} · {data.conn.kind === 'MOCK' ? 'mock' : data.conn.base_url}
+        </p>
+        <p className="small">{data.conn.last_health_message ?? 'Not tested yet.'}</p>
+        <Link className="small" to="/settings/connections">
+          Manage connections
+        </Link>
+      </>
+    )
+  }
+  if (node.type === 'dag') {
+    const { dag } = data
+    const missing = ['failure', 'sla'].filter((kind) =>
+      kind === 'failure' ? !(dag.is_monitored && dag.detect_failures) : !(dag.is_monitored && dag.sla_minutes != null),
+    )
+    return (
+      <>
+        <strong className="mono">{dag.dag_id}</strong>
+        {dag.description && <p className="muted small">{dag.description}</p>}
+        <p className="small">
+          {dag.schedule_summary && <span className="mono">{dag.schedule_summary}</span>}
+          {dag.is_paused && ' · paused'}
+        </p>
+        {dag.tags?.length > 0 && (
+          <div className="tag-list">
+            {dag.tags.map((t) => (
+              <Badge key={t}>{t}</Badge>
+            ))}
+          </div>
+        )}
+        {canEdit &&
+          missing.map((kind) => (
+            <Button key={kind} size="sm" loading={busy} onClick={() => onAttach(dag, kind)}>
+              Add {kind === 'failure' ? 'failure monitor' : 'freshness SLA'}
+            </Button>
+          ))}
+        <Link className="small" to={`/incidents?search=${encodeURIComponent(dag.dag_id)}`}>
+          Incidents for this DAG
+        </Link>
+      </>
+    )
+  }
+  if (node.type === 'monitor' && data.draft) {
+    return (
+      <>
+        <strong>{data.kind === 'failure' ? 'Failure monitor' : 'Freshness SLA'} (not attached)</strong>
+        <p className="muted small">Drag from a DAG&apos;s right edge to this block to attach it.</p>
+        <Button size="sm" onClick={() => onRemoveDraft(node.id)}>
+          Remove
+        </Button>
+      </>
+    )
+  }
+  if (node.type === 'monitor') {
+    const { dag, kind } = data
+    return (
+      <>
+        <strong>{kind === 'failure' ? 'Failure monitor' : 'Freshness SLA'}</strong>
+        <p className="small">
+          on <span className="mono">{dag.dag_id}</span>
+        </p>
+        <p className="muted small">
+          {kind === 'failure'
+            ? 'Opens an incident when a run of this DAG fails, with the failed tasks and their logs.'
+            : 'Opens an incident when the latest successful run finished longer ago than the SLA.'}
+        </p>
+        {kind === 'sla' && <SlaEditor key={dag.sla_minutes} dag={dag} onSave={(m) => onSetSla(dag, m)} disabled={!canEdit || busy} />}
+        <Link className="small" to={`/incidents?search=${encodeURIComponent(dag.dag_id)}`}>
+          {data.count} open incident{data.count === 1 ? '' : 's'}
+        </Link>
+        {canEdit && (
+          <Button variant="danger" size="sm" loading={busy} onClick={() => onDetach(dag, kind)}>
+            Remove monitor
+          </Button>
+        )}
+      </>
+    )
+  }
+  const { workflow } = data
+  return (
+    <>
+      <strong>{workflow.name}</strong>
+      {workflow.description && <p className="muted small">{workflow.description}</p>}
+      <p className="muted small">
+        {data.stale
+          ? 'Runs for any incident that stays unacknowledged too long.'
+          : 'Runs when a connected monitor opens or re-records an incident.'}
+      </p>
+      <Link className="small" to={`/automation/workflows/${workflow.id}`}>
+        Open in the workflow editor
+      </Link>
+    </>
+  )
+}
+
+function Canvas() {
+  const { hasRole } = useAuth()
+  const canEdit = hasRole('ADMIN', 'OPERATOR')
+  const toast = useToast()
+  const { screenToFlowPosition, fitView } = useReactFlow()
+  const wrapper = useRef(null)
+  const draftSeq = useRef(0)
+
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [drafts, setDrafts] = useState([])
+  const [showUnmonitored, setShowUnmonitored] = useState(true)
+  const [selectedId, setSelectedId] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [nodes, setNodes, onNodesChange] = useNodesState([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const fitted = useRef(false)
+
+  const load = useCallback(async () => {
+    try {
+      const [{ items: connections }, workflows, openCounts] = await Promise.all([
+        airflowApi.listConnections(),
+        automationApi.listWorkflows(),
+        incidentsApi.openCounts(),
+      ])
+      const dagPages = await Promise.all(connections.map((c) => airflowApi.listDags(c.id, { limit: 200 })))
+      const counts = {}
+      openCounts.forEach((c) => (counts[`${c.connection_id}:${c.dag_id}:${c.type}`] = c.count))
+      setData({
+        connections: connections.filter((c) => c.is_active),
+        dagsByConnection: Object.fromEntries(connections.map((c, i) => [c.id, dagPages[i].items])),
+        workflows: workflows.filter((w) => w.enabled),
+        counts,
+      })
+      setError(null)
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react/set-state-in-effect -- initial fetch; state is set after await
+    load()
+  }, [load])
+
+  // Rebuild the diagram when data changes, keeping positions the user dragged to.
+  useEffect(() => {
+    if (!data) return
+    const built = buildPipeline({ ...data, drafts, showUnmonitored, canEdit })
+    setNodes((previous) => {
+      const moved = Object.fromEntries(previous.map((n) => [n.id, n]))
+      return built.nodes.map((n) =>
+        moved[n.id] ? { ...n, position: moved[n.id].position, selected: moved[n.id].selected } : n,
+      )
+    })
+    setEdges(built.edges)
+    if (!fitted.current) {
+      fitted.current = true
+      requestAnimationFrame(() => fitView({ padding: 0.15, maxZoom: 1 }))
+    }
+  }, [data, drafts, showUnmonitored, canEdit, setNodes, setEdges, fitView])
+
+  async function patchDag(dag, body, message) {
+    setBusy(true)
+    try {
+      await airflowApi.updateDag(dag.id, body)
+      toast.success(message)
+      await load()
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const attach = (dag, kind) =>
+    patchDag(dag, attachBody(dag, kind), `${kind === 'failure' ? 'Failure monitor' : 'Freshness SLA'} added to ${dag.dag_id}`)
+  const detach = (dag, kind) => {
+    setSelectedId(null)
+    return patchDag(dag, detachBody(dag, kind), `Monitor removed from ${dag.dag_id}`)
+  }
+
+  const isValidConnection = useCallback(
+    (c) => c.source?.startsWith('dag:') && c.target?.startsWith('draft:'),
+    [],
+  )
+
+  async function onConnect(connection) {
+    if (!isValidConnection(connection)) return toast.error('Connect a DAG to an unattached monitor block')
+    const draft = drafts.find((d) => d.id === connection.target)
+    const dagNode = nodes.find((n) => n.id === connection.source)
+    if (!draft || !dagNode) return
+    const { dag } = dagNode.data
+    const already = draft.kind === 'failure' ? dag.is_monitored && dag.detect_failures : dag.is_monitored && dag.sla_minutes != null
+    if (already) return toast.error(`${dag.dag_id} already has this monitor`)
+    setDrafts((list) => list.filter((d) => d.id !== draft.id))
+    await attach(dag, draft.kind)
+  }
+
+  // One callback for a delete gesture: removing a monitor also removes its incoming edge, and
+  // that must not detach it twice.
+  function onDelete({ nodes: deletedNodes, edges: deletedEdges }) {
+    const monitors = new Map()
+    deletedNodes.forEach((node) => {
+      if (node.data.draft) setDrafts((list) => list.filter((d) => d.id !== node.id))
+      else if (node.type === 'monitor') monitors.set(node.id, node)
+    })
+    deletedEdges
+      .filter((e) => e.target.startsWith('mon:'))
+      .forEach((e) => {
+        const monitor = nodes.find((n) => n.id === e.target)
+        if (monitor) monitors.set(monitor.id, monitor)
+      })
+    const byDag = new Map()
+    monitors.forEach((m) => byDag.set(m.data.dag.id, [...(byDag.get(m.data.dag.id) ?? []), m]))
+    byDag.forEach((list) => {
+      const { dag } = list[0].data
+      if (list.length > 1) {
+        setSelectedId(null)
+        patchDag(dag, { is_monitored: false, sla_minutes: null }, `Monitoring removed from ${dag.dag_id}`)
+      } else detach(dag, list[0].data.kind)
+    })
+  }
+
+  function addDraft(kind, position) {
+    let at = position
+    if (!at) {
+      const box = wrapper.current?.getBoundingClientRect()
+      at = screenToFlowPosition(box ? { x: box.left + box.width / 2, y: box.top + 80 } : { x: 0, y: 0 })
+    }
+    draftSeq.current += 1
+    setDrafts((list) => [...list, { id: `draft:${draftSeq.current}`, kind, position: at }])
+  }
+
+  if (error) return <Alert tone="danger">{error}</Alert>
+  if (!data) return <p className="muted">Loading…</p>
+  if (!data.connections.length) {
+    return (
+      <EmptyState title="No Airflow connections yet">
+        <Link to="/settings/connections">Add a connection</Link> and sync its DAGs to see your pipelines here.
+      </EmptyState>
+    )
+  }
+
+  const selected = nodes.find((n) => n.id === selectedId)
+
+  return (
+    <div className={`editor-shell ${canEdit ? '' : 'editor-readonly'}`}>
+      {canEdit && (
+        <aside className="editor-palette" aria-label="Monitor blocks">
+          <p className="muted small">Drag a monitor onto the canvas, then connect a DAG to it.</p>
+          <div className="palette-group">
+            <div className="palette-title">Monitors</div>
+            {MONITORS.map((m) => (
+              <button
+                key={m.kind}
+                type="button"
+                className={`palette-item pnode-monitor-${m.kind}`}
+                draggable
+                title={m.hint}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(DRAG_TYPE, m.kind)
+                  e.dataTransfer.effectAllowed = 'move'
+                }}
+                onClick={() => addDraft(m.kind)}
+              >
+                <span className="block-icon" aria-hidden="true">
+                  {m.icon}
+                </span>
+                <span>{m.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="palette-group">
+            <div className="palette-title muted">Coming in Plan 4</div>
+            {['Row count', 'Null rate', 'Schema drift'].map((label) => (
+              <button key={label} type="button" className="palette-item" disabled title="Data-quality monitors (Plan 4)">
+                <span className="block-icon" aria-hidden="true">
+                  ▦
+                </span>
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+      )}
+
+      <div
+        className="editor-canvas"
+        ref={wrapper}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault()
+          const kind = e.dataTransfer.getData(DRAG_TYPE)
+          if (kind && canEdit) addDraft(kind, screenToFlowPosition({ x: e.clientX - 100, y: e.clientY - 30 }))
+        }}
+      >
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={NODE_TYPES}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          isValidConnection={isValidConnection}
+          onDelete={onDelete}
+          onSelectionChange={({ nodes: ns }) => setSelectedId(ns.length === 1 ? ns[0].id : null)}
+          nodesConnectable={canEdit}
+          deleteKeyCode={canEdit ? ['Backspace', 'Delete'] : null}
+          defaultEdgeOptions={EDGE_OPTIONS}
+          colorMode="system"
+          minZoom={0.15}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background gap={20} />
+          <Controls showInteractive={false} />
+          <MiniMap pannable zoomable className="editor-minimap" />
+        </ReactFlow>
+      </div>
+
+      <aside className="editor-panel" aria-label="Details">
+        <Panel
+          node={selected}
+          canEdit={canEdit}
+          busy={busy}
+          onAttach={attach}
+          onDetach={detach}
+          onSetSla={(dag, minutes) => patchDag(dag, { sla_minutes: minutes }, `SLA for ${dag.dag_id} set to ${minutes} min`)}
+          onRemoveDraft={(id) => {
+            setDrafts((list) => list.filter((d) => d.id !== id))
+            setSelectedId(null)
+          }}
+          showUnmonitored={showUnmonitored}
+          setShowUnmonitored={setShowUnmonitored}
+        />
+      </aside>
+    </div>
+  )
+}
+
+export default function PipelineCanvas() {
+  return (
+    <div className="editor-page">
+      <div className="editor-toolbar">
+        <div>
+          <h1 className="editor-title">Pipelines</h1>
+        </div>
+        <span className="muted small">Airflow connection → DAG → monitors → automations</span>
+      </div>
+      <ReactFlowProvider>
+        <Canvas />
+      </ReactFlowProvider>
+    </div>
+  )
+}

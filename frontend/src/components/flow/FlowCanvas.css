@@ -1,0 +1,553 @@
+/* Canvas pages (workflow editor, pipeline canvas, run replay). Uses the tokens in index.css. */
+
+:root {
+  --cat-trigger: #7c3aed;
+  --cat-logic: #0e7490;
+  --cat-diagnosis: #2563eb;
+  --cat-approval: #b45309;
+  --cat-action: #c2410c;
+  --cat-verify: #15803d;
+  --cat-output: #4b5563;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cat-trigger: #a78bfa;
+    --cat-logic: #22d3ee;
+    --cat-diagnosis: #60a5fa;
+    --cat-approval: #fbbf24;
+    --cat-action: #fb923c;
+    --cat-verify: #4ade80;
+    --cat-output: #9ca3af;
+  }
+}
+
+/* ------------------------------------------------------------------ page layout */
+.editor-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: calc(100vh - 112px);
+  min-height: 560px;
+}
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.editor-title {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.editor-name {
+  min-width: 220px;
+  max-width: 420px;
+  flex: 0 1 360px;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.editor-shell {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 200px minmax(0, 1fr) 320px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.editor-shell.editor-readonly {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+@media (max-width: 1100px) {
+  .editor-shell,
+  .editor-shell.editor-readonly {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(420px, 1fr) auto;
+  }
+}
+
+.editor-palette,
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  overflow-y: auto;
+  background: var(--surface);
+}
+
+.editor-palette {
+  border-right: 1px solid var(--border);
+}
+
+.editor-panel {
+  border-left: 1px solid var(--border);
+}
+
+.editor-panel p,
+.editor-palette p {
+  margin: 0;
+}
+
+.editor-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-minimap {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.palette-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.palette-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.palette-item {
+  --cat: var(--cat-output);
+
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: grab;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--cat);
+  border-radius: 6px;
+}
+
+.palette-item:hover:not(:disabled) {
+  border-color: var(--cat);
+}
+
+.palette-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.check-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.editor-problems {
+  padding: 0.6rem 0.75rem;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-radius: 6px;
+}
+
+.editor-problems ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1rem;
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ workflow blocks */
+.block-trigger,
+.palette-item.block-trigger {
+  --cat: var(--cat-trigger);
+}
+
+.block-logic,
+.palette-item.block-logic {
+  --cat: var(--cat-logic);
+}
+
+.block-diagnosis,
+.palette-item.block-diagnosis {
+  --cat: var(--cat-diagnosis);
+}
+
+.block-approval,
+.palette-item.block-approval {
+  --cat: var(--cat-approval);
+}
+
+.block-action,
+.palette-item.block-action {
+  --cat: var(--cat-action);
+}
+
+.block-verify,
+.palette-item.block-verify {
+  --cat: var(--cat-verify);
+}
+
+.block-output,
+.palette-item.block-output {
+  --cat: var(--cat-output);
+}
+
+.block {
+  width: 230px;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--cat);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.block-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.block-problem {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px var(--danger-soft);
+}
+
+.block-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem 0.25rem;
+}
+
+.block-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 0.85rem;
+  color: var(--cat, var(--text));
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+
+.block-titles {
+  min-width: 0;
+}
+
+.block-title {
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-type {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-summary,
+.block-error,
+.block-run-label {
+  padding: 0 0.6rem 0.35rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.block-error {
+  color: var(--danger);
+}
+
+.block-run-label {
+  color: var(--text);
+}
+
+.block-ports {
+  display: flex;
+  flex-direction: column;
+  padding: 0.2rem 0 0.35rem;
+  border-top: 1px dashed var(--border);
+}
+
+.block-port {
+  position: relative;
+  padding: 0.1rem 0.9rem 0.1rem 0.6rem;
+  text-align: right;
+}
+
+.block-port-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.block-port-bad .block-port-label {
+  color: var(--warning);
+}
+
+.block .react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: var(--surface);
+  border: 2px solid var(--cat);
+}
+
+.block-port .react-flow__handle {
+  right: -6px;
+}
+
+.block .block-handle-in {
+  top: 22px;
+  left: -6px;
+}
+
+.react-flow__handle.connectingfrom,
+.react-flow__handle.valid {
+  background: var(--accent);
+}
+
+/* run replay */
+.block-dimmed {
+  opacity: 0.35;
+}
+
+.block-run-success {
+  box-shadow: 0 0 0 3px var(--success-soft);
+  border-color: var(--success);
+}
+
+.block-run-warning {
+  box-shadow: 0 0 0 3px var(--warning-soft);
+  border-color: var(--warning);
+}
+
+.block-run-danger {
+  box-shadow: 0 0 0 3px var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.block-run-waiting {
+  border-color: var(--warning);
+  animation: block-pulse 1.6s ease-in-out infinite;
+}
+
+.block-run-skipped {
+  opacity: 0.6;
+}
+
+@keyframes block-pulse {
+  50% {
+    box-shadow: 0 0 0 6px var(--warning-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .block-run-waiting {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--warning-soft);
+  }
+}
+
+.react-flow__edge.edge-taken .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.react-flow__edge.edge-idle .react-flow__edge-path {
+  opacity: 0.35;
+}
+
+.run-canvas {
+  position: relative;
+  height: 460px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.run-legend {
+  position: absolute;
+  bottom: 0.4rem;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 0.4rem;
+  border-radius: 50%;
+}
+
+.legend-success {
+  background: var(--success);
+}
+
+.legend-warning,
+.legend-waiting {
+  background: var(--warning);
+}
+
+.legend-danger {
+  background: var(--danger);
+}
+
+/* ------------------------------------------------------------------ pipeline nodes */
+.pnode {
+  width: 240px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--pcolor, var(--border));
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.pnode-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.pnode-conn {
+  --pcolor: var(--accent);
+}
+
+.pnode-dag {
+  --pcolor: var(--cat-diagnosis);
+}
+
+.pnode-workflow {
+  --pcolor: var(--cat-trigger);
+}
+
+.pnode-monitor-failure {
+  --pcolor: var(--danger);
+}
+
+.pnode-monitor-sla {
+  --pcolor: var(--warning);
+}
+
+.palette-item.pnode-monitor-failure {
+  --cat: var(--danger);
+}
+
+.palette-item.pnode-monitor-sla {
+  --cat: var(--warning);
+}
+
+.pnode-faded {
+  opacity: 0.55;
+}
+
+.pnode-draft {
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+.pnode-kicker {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.pnode-title {
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pnode-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pnode-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.pnode .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  background: var(--surface);
+  border: 2px solid var(--pcolor, var(--border));
+}
+
+.pnode-dag .pnode-handle-out {
+  width: 13px;
+  height: 13px;
+  cursor: crosshair;
+}
+
+.react-flow__edge.edge-feed .react-flow__edge-path {
+  stroke: var(--cat-trigger);
+  stroke-dasharray: 6 4;
+}
+
+.react-flow__edge.edge-feed-stale .react-flow__edge-path {
+  opacity: 0.45;
+  stroke-dasharray: 2 5;
+}
+
+.react-flow__edge.edge-attach .react-flow__edge-path {
+  stroke-width: 2;
+}
+
+/* React Flow chrome in our palette */
+.react-flow {
+  --xy-background-color: var(--bg);
+  --xy-edge-label-background-color: var(--surface);
+  --xy-edge-label-color: var(--text-muted);
+}
+
+.react-flow__edge-textbg {
+  fill: var(--surface);
+}
+
+.react-flow__edge-text {
+  font-size: 11px;
+  fill: var(--text-muted);
+}
