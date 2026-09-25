@@ -38,9 +38,16 @@ from app.services import (
 PASSWORD = "correct-horse-battery"
 
 
+# Set TEST_DATABASE_URL (e.g. a disposable PostgreSQL database) to run the whole suite against a
+# real server instead of in-memory SQLite. The schema is dropped and recreated for every test.
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+
 @pytest.fixture
 def session_factory() -> Iterator[sessionmaker[Session]]:
-    engine = create_db_engine("sqlite://")
+    engine = create_db_engine(TEST_DATABASE_URL or "sqlite://")
+    if TEST_DATABASE_URL:
+        Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield create_session_factory(engine)
     engine.dispose()

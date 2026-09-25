@@ -3,6 +3,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import partial
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,12 +24,13 @@ from app.services.detection_service import CycleSummary
 logger = logging.getLogger(__name__)
 
 
-def run_cycle_with_automation(
+def run_detection_cycle(
     db: Session, *, trigger: str = "schedule", actor: User | None = None
 ) -> CycleSummary:
-    """One scheduler cycle: detection, then advance automation runs (same lease)."""
+    """One detection cycle. A manual run ("Run detection now") also advances automation right
+    away so the operator sees the result; scheduled runs leave that to the automation loop."""
     summary = detection_service.run_cycle(db, trigger=trigger, actor=actor)
-    if get_settings().AUTOMATION_ENABLED:
+    if trigger == "manual" and get_settings().AUTOMATION_ENABLED:
         try:
             summary.automation = automation_service.tick(db).as_dict()
         except Exception as exc:
@@ -38,13 +40,20 @@ def run_cycle_with_automation(
     return summary
 
 
+def run_automation_tick(
+    db: Session, *, trigger: str = "schedule", actor: User | None = None
+) -> automation_service.TickSummary:
+    return automation_service.tick(db)
+
+
 def create_app(
     *,
     session_factory: sessionmaker[Session] | None = None,
     bootstrap: bool = True,
     detection: bool | None = None,
 ) -> FastAPI:
-    """`detection=None` follows DETECTION_ENABLED; tests pass False to skip the polling loop."""
+    """`detection=None` follows DETECTION_ENABLED (and AUTOMATION_ENABLED for the automation
+    loop); tests pass False to skip both polling loops."""
     settings = get_settings()
     logging.basicConfig(level=logging.DEBUG if settings.DEBUG else logging.INFO)
     factory = session_factory or SessionLocal
@@ -52,17 +61,30 @@ def create_app(
     detector = DetectionScheduler(
         factory,
         interval_seconds=settings.DETECTION_INTERVAL_SECONDS,
-        run_cycle=run_cycle_with_automation,
+        run_cycle=run_detection_cycle,
         acquire_lease=detection_service.try_acquire_lease,
+        name="detection",
     )
+    automation_loop = DetectionScheduler(
+        factory,
+        interval_seconds=settings.AUTOMATION_INTERVAL_SECONDS,
+        run_cycle=run_automation_tick,
+        acquire_lease=partial(detection_service.try_acquire_lease, name="automation"),
+        name="automation",
+    )
+    start_automation = settings.AUTOMATION_ENABLED if detection is None else detection
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if bootstrap:
             await run_in_threadpool(run_bootstrap, factory)
-        task = asyncio.create_task(detector.run_forever()) if start_detection else None
+        tasks = [
+            asyncio.create_task(loop.run_forever())
+            for loop, enabled in ((detector, start_detection), (automation_loop, start_automation))
+            if enabled
+        ]
         yield
-        if task is not None:
+        for task in tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
@@ -77,6 +99,7 @@ def create_app(
     )
     app.state.session_factory = factory
     app.state.detector = detector
+    app.state.automation_loop = automation_loop
     app.state.login_limiter = LoginRateLimiter(
         settings.LOGIN_MAX_ATTEMPTS, settings.LOGIN_LOCKOUT_MINUTES * 60
     )

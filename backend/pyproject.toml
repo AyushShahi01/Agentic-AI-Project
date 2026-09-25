@@ -2,6 +2,7 @@
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = ["live_airflow: end-to-end against a real Airflow (needs LIVE_AIRFLOW_URL)"]
 
 [tool.ruff]
 line-length = 100

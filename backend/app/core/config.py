@@ -61,6 +61,7 @@ class Settings(BaseSettings):
 
     # Automation (Plan 2)
     AUTOMATION_ENABLED: bool = True
+    AUTOMATION_INTERVAL_SECONDS: int = 30  # how often waiting/pending runs are advanced
     AUTOMATION_FORCE_DRY_RUN: bool = False  # True = no workflow may change anything
     AUTOMATION_MAX_ACTIONS_PER_DAG_PER_DAY: int = 3
     AUTOMATION_MAX_STEPS_PER_RUN: int = 50

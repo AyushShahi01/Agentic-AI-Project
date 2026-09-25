@@ -1,4 +1,6 @@
-"""In-process detection loop guarded by a DB lease (one active detector across workers)."""
+"""In-process polling loops guarded by a DB lease (one active holder per loop across workers).
+
+Used for detection and, since Plan 4, for the automation engine's own faster loop."""
 
 import logging
 import os
@@ -42,7 +44,9 @@ class DetectionScheduler:
         interval_seconds: int,
         run_cycle: Callable[..., object],
         acquire_lease: Callable[[Session, str, int, datetime], bool],
+        name: str = "detection",
     ) -> None:
+        self.name = name
         self.session_factory = session_factory
         self.interval_seconds = interval_seconds
         self.holder = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
@@ -77,10 +81,10 @@ class DetectionScheduler:
         try:
             self.run_once(trigger="schedule")
         except DetectionBusyError:
-            logger.debug("Detection lease held elsewhere; skipping this cycle")
+            logger.debug("%s lease held elsewhere; skipping this cycle", self.name)
         except Exception as exc:
             self.last_error = str(exc)[:500]
-            logger.exception("Scheduled detection cycle failed")
+            logger.exception("Scheduled %s cycle failed", self.name)
 
     async def run_forever(self) -> None:
         self.running_loop = True

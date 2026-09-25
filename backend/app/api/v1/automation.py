@@ -2,11 +2,12 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from app.automation.graph import catalog
 from app.automation.templates import TEMPLATES
 from app.automation.types import ApprovalStatus, RunStatus
+from app.core.config import get_settings
 from app.core.dependencies import (
     AdminUser,
     ClientIp,
@@ -18,6 +19,7 @@ from app.core.dependencies import (
 from app.models.automation import Workflow
 from app.schemas.automation import (
     ApprovalRead,
+    AutomationStatus,
     AutomationSummary,
     DecisionRequest,
     GraphCheck,
@@ -153,6 +155,23 @@ def cancel_run(
     automation_service.cancel_run(db, run_id, actor=operator, ip_address=ip)
     db.expire_all()
     return WorkflowRunDetail.model_validate(automation_service.get_run(db, run_id))
+
+
+@router.get("/status", response_model=AutomationStatus)
+def status(request: Request, _: ViewerUser) -> AutomationStatus:
+    loop = request.app.state.automation_loop
+    settings = get_settings()
+    last = loop.last_summary
+    return AutomationStatus(
+        enabled=settings.AUTOMATION_ENABLED,
+        force_dry_run=settings.AUTOMATION_FORCE_DRY_RUN,
+        loop_running=loop.running_loop,
+        interval_seconds=loop.interval_seconds,
+        last_tick=TickSummaryRead(**last.as_dict())
+        if isinstance(last, automation_service.TickSummary)
+        else None,
+        last_error=loop.last_error,
+    )
 
 
 @router.post("/tick", response_model=TickSummaryRead)

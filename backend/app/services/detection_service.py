@@ -60,13 +60,15 @@ class CycleSummary:
 # ---------------------------------------------------------------------- lease
 
 
-def try_acquire_lease(db: Session, holder: str, ttl_seconds: int, now: datetime) -> bool:
-    """Atomically take (or renew) the detector lease. Safe across processes."""
+def try_acquire_lease(
+    db: Session, holder: str, ttl_seconds: int, now: datetime, *, name: str = LEASE_NAME
+) -> bool:
+    """Atomically take (or renew) the named lease (`detector`, `automation`). Process-safe."""
     expires = now + timedelta(seconds=ttl_seconds)
     result = db.execute(
         update(DetectionLease)
         .where(
-            DetectionLease.name == LEASE_NAME,
+            DetectionLease.name == name,
             (DetectionLease.expires_at < now) | (DetectionLease.holder == holder),
         )
         .values(holder=holder, expires_at=expires, renewed_at=now)
@@ -74,12 +76,12 @@ def try_acquire_lease(db: Session, holder: str, ttl_seconds: int, now: datetime)
     if result.rowcount == 1:  # type: ignore[attr-defined]
         db.commit()
         return True
-    exists = db.scalar(select(DetectionLease.name).where(DetectionLease.name == LEASE_NAME))
+    exists = db.scalar(select(DetectionLease.name).where(DetectionLease.name == name))
     if exists:
         db.rollback()
         return False
     try:
-        db.add(DetectionLease(name=LEASE_NAME, holder=holder, expires_at=expires, renewed_at=now))
+        db.add(DetectionLease(name=name, holder=holder, expires_at=expires, renewed_at=now))
         db.commit()
         return True
     except IntegrityError:
@@ -87,8 +89,8 @@ def try_acquire_lease(db: Session, holder: str, ttl_seconds: int, now: datetime)
         return False
 
 
-def get_lease(db: Session) -> DetectionLease | None:
-    return db.get(DetectionLease, LEASE_NAME)
+def get_lease(db: Session, name: str = LEASE_NAME) -> DetectionLease | None:
+    return db.get(DetectionLease, name)
 
 
 # ---------------------------------------------------------------------- helpers

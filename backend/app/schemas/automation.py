@@ -179,5 +179,14 @@ class TickSummaryRead(BaseModel):
     errors: list[dict[str, str]]
 
 
+class AutomationStatus(BaseModel):
+    enabled: bool
+    force_dry_run: bool
+    loop_running: bool
+    interval_seconds: int
+    last_tick: TickSummaryRead | None
+    last_error: str | None
+
+
 class MarkedRead(BaseModel):
     updated: int
