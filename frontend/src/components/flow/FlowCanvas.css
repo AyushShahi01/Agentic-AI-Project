@@ -447,6 +447,36 @@
   --pcolor: var(--accent);
 }
 
+.pnode-offline {
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+.pnode-offline-danger {
+  --pcolor: var(--danger);
+}
+
+.pnode-offline-warning {
+  --pcolor: var(--warning);
+}
+
+.pnode-offline-neutral {
+  --pcolor: var(--text-muted);
+}
+
+.pnode-offline-note {
+  margin-top: 0.35rem;
+  color: var(--text-muted);
+}
+
+.connection-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .pnode-dag {
   --pcolor: var(--cat-diagnosis);
 }

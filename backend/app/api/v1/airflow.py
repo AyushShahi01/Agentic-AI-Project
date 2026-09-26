@@ -10,6 +10,7 @@ from app.core.dependencies import (
     PageParams,
     ViewerUser,
 )
+from app.core.exceptions import BadRequestError
 from app.schemas.airflow import (
     AirflowConnCreate,
     AirflowConnRead,
@@ -21,7 +22,7 @@ from app.schemas.airflow import (
     DagSyncResult,
 )
 from app.schemas.common import Page
-from app.services import airflow_service
+from app.services import airflow_service, connection_monitor_service
 from app.services.airflow_service import ProbeOutcome
 
 router = APIRouter(prefix="/airflow", tags=["airflow"])
@@ -105,6 +106,18 @@ def test_saved_connection(
         db, connection_id, actor=operator, ip_address=ip
     )
     return _test_result(outcome)
+
+
+@router.post("/connections/{connection_id}/refresh", response_model=AirflowConnRead)
+def refresh_connection(
+    connection_id: uuid.UUID, db: DbSession, operator: OperatorUser
+) -> AirflowConnRead:
+    """Re-check a connection now and refresh its DAG list (the monitor does this periodically)."""
+    conn = airflow_service.get_connection(db, connection_id)
+    if not conn.is_active:
+        raise BadRequestError("Connection is inactive; activate it before refreshing")
+    conn = connection_monitor_service.refresh_connection(db, conn, actor=operator)
+    return AirflowConnRead.model_validate(conn)
 
 
 # ---------------------------------------------------------------------- DAGs

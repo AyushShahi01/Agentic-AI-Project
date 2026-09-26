@@ -90,6 +90,9 @@ class AirflowConnRead(BaseModel):
     last_health_message: str | None
     last_latency_ms: int | None
     last_checked_at: datetime | None
+    # Server-computed: show this connection's DAGs only while `is_live`.
+    is_live: bool
+    status_stale: bool
     created_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime

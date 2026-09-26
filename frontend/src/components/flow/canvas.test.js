@@ -11,6 +11,7 @@ import {
 } from '../../pages/pipelines/pipelineModel'
 import { connect, connectionProblem, defaultConfig, fromFlow, nextNodeId, toFlow } from './graph'
 import { layeredLayout } from './layout'
+import { connectionState } from '../../connectionState'
 
 const retryGraph = {
   nodes: [
@@ -119,7 +120,7 @@ test('workflow feeds follow trigger types and leading filters', () => {
 })
 
 test('pipeline diagram wires connection → DAG → monitors → workflows', () => {
-  const conn = { id: 'c1', name: 'dev', environment: 'DEV' }
+  const conn = { id: 'c1', name: 'dev', environment: 'DEV', is_active: true, is_live: true }
   const { nodes, edges } = buildPipeline({
     connections: [conn],
     dagsByConnection: {
@@ -138,4 +139,46 @@ test('pipeline diagram wires connection → DAG → monitors → workflows', () 
   const feeds = edges.filter((e) => e.target === 'wf:w1').map((e) => e.source)
   assert.deepEqual(feeds, ['mon:failure:d1'])
   assert.ok(edges.some((e) => e.source === 'conn:c1' && e.target === 'dag:d1'))
+})
+
+test('an offline connection shows alone, without its cached DAGs', () => {
+  const conn = {
+    id: 'c1',
+    name: 'dev',
+    environment: 'DEV',
+    is_active: true,
+    is_live: false,
+    status_stale: false,
+    last_health_status: 'UNREACHABLE',
+    last_health_message: 'Cannot reach http://localhost:8080.',
+  }
+  const { nodes, edges } = buildPipeline({
+    connections: [conn],
+    dagsByConnection: { c1: [dag({ last_synced_at: '2026-09-24T09:46:42Z' })] },
+    workflows: [{ id: 'w1', name: 'Retry', mode: 'LIVE', graph: retryGraph }],
+    counts: {},
+    drafts: [],
+    showUnmonitored: true,
+    canEdit: true,
+  })
+  assert.deepEqual(
+    nodes.map((n) => n.id),
+    ['conn:c1', 'wf:w1'],
+  )
+  assert.equal(edges.length, 0)
+  assert.equal(nodes[0].data.state.label, 'Connection lost')
+})
+
+test('connection state wording', () => {
+  const base = { is_active: true, is_live: false, status_stale: false, airflow_version: null, last_health_message: 'x' }
+  const label = (over, opts) => connectionState({ ...base, ...over }, opts).label
+  assert.equal(label({ is_live: true, last_health_status: 'HEALTHY' }), 'Connected')
+  assert.equal(connectionState({ ...base, is_live: true, last_health_status: 'HEALTHY' }).live, true)
+  assert.equal(label({ last_health_status: 'UNREACHABLE' }), 'Airflow not connected')
+  assert.equal(label({ last_health_status: 'UNREACHABLE' }, { everConnected: true }), 'Connection lost')
+  assert.equal(label({ last_health_status: 'UNREACHABLE', airflow_version: '2.10.5' }), 'Connection lost')
+  assert.equal(label({ last_health_status: 'HEALTHY', status_stale: true }), 'Status unknown')
+  assert.equal(label({ last_health_status: 'UNKNOWN' }), 'Checking connection…')
+  assert.equal(label({ last_health_status: 'UNAUTHORIZED' }), 'Authentication failed')
+  assert.equal(label({ is_active: false, last_health_status: 'HEALTHY' }), 'Inactive')
 })

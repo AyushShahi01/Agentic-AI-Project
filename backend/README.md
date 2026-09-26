@@ -54,6 +54,19 @@ With `DETECTION_ENABLED=true` (default), the server polls monitored DAGs every
 
 After pulling Plan 1, run `alembic upgrade head` to create the incident tables.
 
+## Connection monitor
+
+With `AIRFLOW_MONITOR_ENABLED=true` (default), the server lists DAGs from every active
+connection every `AIRFLOW_MONITOR_INTERVAL_SECONDS` (30s). Success refreshes the DAG list and
+marks the connection `HEALTHY`; failure stores the reason (`UNREACHABLE`, `UNAUTHORIZED`, ...).
+Each status change is written to the audit log as `airflow_conn.status_changed`.
+
+The API reports `is_live` on every connection: `HEALTHY` and checked within two monitor
+intervals. The UI only shows a connection's DAGs while it is live; otherwise it shows
+"Connection lost" / "Airflow not connected". Operators can force a check with
+`POST /api/v1/airflow/connections/{id}/refresh` ("Retry now"). Only one worker polls
+(`connections` lease in `detection_leases`).
+
 ## Automation (Plan 2)
 
 Incidents trigger **workflows**: graphs of typed steps (trigger → filter → diagnose → approval →

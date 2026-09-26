@@ -18,7 +18,7 @@ from app.db.init_db import run_bootstrap
 from app.db.session import SessionLocal
 from app.detection.scheduler import DetectionScheduler
 from app.models.user import User
-from app.services import automation_service, detection_service
+from app.services import automation_service, connection_monitor_service, detection_service
 from app.services.detection_service import CycleSummary
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,16 @@ def create_app(
         name="automation",
     )
     start_automation = settings.AUTOMATION_ENABLED if detection is None else detection
+    connection_monitor = DetectionScheduler(
+        factory,
+        interval_seconds=settings.AIRFLOW_MONITOR_INTERVAL_SECONDS,
+        run_cycle=connection_monitor_service.run_cycle,
+        acquire_lease=partial(
+            detection_service.try_acquire_lease, name=connection_monitor_service.LEASE_NAME
+        ),
+        name="connections",
+    )
+    start_monitor = settings.AIRFLOW_MONITOR_ENABLED if detection is None else detection
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -80,7 +90,11 @@ def create_app(
             await run_in_threadpool(run_bootstrap, factory)
         tasks = [
             asyncio.create_task(loop.run_forever())
-            for loop, enabled in ((detector, start_detection), (automation_loop, start_automation))
+            for loop, enabled in (
+                (detector, start_detection),
+                (automation_loop, start_automation),
+                (connection_monitor, start_monitor),
+            )
             if enabled
         ]
         yield
@@ -100,6 +114,7 @@ def create_app(
     app.state.session_factory = factory
     app.state.detector = detector
     app.state.automation_loop = automation_loop
+    app.state.connection_monitor = connection_monitor
     app.state.login_limiter = LoginRateLimiter(
         settings.LOGIN_MAX_ATTEMPTS, settings.LOGIN_LOCKOUT_MINUTES * 60
     )

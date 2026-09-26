@@ -1,3 +1,4 @@
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,7 @@ from app.orchestration.airflow.base import (
     AdapterConfig,
     AirflowAdapter,
     AirflowAdapterError,
+    AirflowDagSummary,
     ApiVersion,
     AuthType,
     ConnectionStatus,
@@ -325,6 +327,14 @@ def store_health(conn: AirflowConnection, result: ConnectionTestResult, when: da
         conn.airflow_version = result.airflow_version
 
 
+def mark_healthy(conn: AirflowConnection, latency_ms: int | None, when: datetime) -> None:
+    """Record a successful live call that was not a probe (e.g. listing DAGs)."""
+    conn.last_health_status = ConnectionStatus.HEALTHY
+    conn.last_health_message = "Connected"
+    conn.last_latency_ms = latency_ms
+    conn.last_checked_at = when
+
+
 def check_saved_connection(
     db: Session, connection_id: uuid.UUID, *, actor: User, ip_address: str | None
 ) -> ProbeOutcome:
@@ -356,6 +366,7 @@ def sync_dags(
         raise BadRequestError("Connection is inactive; activate it before syncing DAGs")
     adapter = adapter_for(conn)
     now = utcnow()
+    started = time.perf_counter()
     try:
         remote_dags = run_async(adapter.list_dags)
     except AirflowAdapterError as exc:
@@ -376,6 +387,35 @@ def sync_dags(
             details={"status": exc.result.status},
         ) from exc
 
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    mark_healthy(conn, latency_ms, now)
+    created, updated, missing = apply_remote_dags(db, conn, remote_dags, now)
+
+    audit_service.record(
+        db,
+        action="airflow_dags.sync",
+        entity_type="airflow_connection",
+        entity_id=conn.id,
+        actor=actor,
+        details={
+            "ok": True,
+            "total": len(remote_dags),
+            "created": created,
+            "updated": updated,
+            "missing": missing,
+        },
+        ip_address=ip_address,
+    )
+    db.commit()
+    return SyncOutcome(
+        total=len(remote_dags), created=created, updated=updated, missing=missing, synced_at=now
+    )
+
+
+def apply_remote_dags(
+    db: Session, conn: AirflowConnection, remote_dags: list[AirflowDagSummary], now: datetime
+) -> tuple[int, int, int]:
+    """Reconcile Airflow's DAG list into `monitored_dags`; returns (created, updated, missing)."""
     existing = {d.dag_id: d for d in conn.dags}
     seen: set[str] = set()
     created = updated = 0
@@ -400,26 +440,7 @@ def sync_dags(
         if dag_id not in seen and dag.is_present:
             dag.is_present = False
             missing += 1
-
-    audit_service.record(
-        db,
-        action="airflow_dags.sync",
-        entity_type="airflow_connection",
-        entity_id=conn.id,
-        actor=actor,
-        details={
-            "ok": True,
-            "total": len(remote_dags),
-            "created": created,
-            "updated": updated,
-            "missing": missing,
-        },
-        ip_address=ip_address,
-    )
-    db.commit()
-    return SyncOutcome(
-        total=len(remote_dags), created=created, updated=updated, missing=missing, synced_at=now
-    )
+    return created, updated, missing
 
 
 def list_dags(

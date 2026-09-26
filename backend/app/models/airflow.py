@@ -16,7 +16,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UTCDateTime
+from app.core.config import get_settings
+from app.db.base import Base, TimestampMixin, UTCDateTime, utcnow
 from app.orchestration.airflow.base import ApiVersion, AuthType, ConnectionStatus
 
 
@@ -79,6 +80,33 @@ class AirflowConnection(TimestampMixin, Base):
     @property
     def has_secret(self) -> bool:
         return bool(self.encrypted_secret)
+
+    @property
+    def status_stale(self) -> bool:
+        """True when the connection monitor should have re-checked this connection but has not."""
+        settings = get_settings()
+        if not settings.AIRFLOW_MONITOR_ENABLED or not self.is_active:
+            return False
+        # Never checked (new or just edited): give the monitor one window to get to it.
+        reference = self.last_checked_at or self.updated_at
+        if reference is None:
+            return False
+        # Two monitor intervals plus one worst-case Airflow call.
+        max_age = (
+            2 * settings.AIRFLOW_MONITOR_INTERVAL_SECONDS
+            + settings.AIRFLOW_CONNECT_TIMEOUT_SECONDS
+            + settings.AIRFLOW_READ_TIMEOUT_SECONDS
+        )
+        return (utcnow() - reference).total_seconds() > max_age
+
+    @property
+    def is_live(self) -> bool:
+        """Airflow answered recently enough that its DAG list can be shown as current."""
+        return (
+            self.is_active
+            and self.last_health_status == ConnectionStatus.HEALTHY
+            and not self.status_stale
+        )
 
 
 class MonitoredDag(TimestampMixin, Base):

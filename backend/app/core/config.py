@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     AIRFLOW_ALLOWED_HOSTS: list[str] = []
     AIRFLOW_CONNECT_TIMEOUT_SECONDS: float = 5
     AIRFLOW_READ_TIMEOUT_SECONDS: float = 10
+    # Connection monitor: re-checks every active connection and refreshes its DAG list. A
+    # connection counts as live only if it answered within ~2 intervals (see airflow_service).
+    AIRFLOW_MONITOR_ENABLED: bool = True
+    AIRFLOW_MONITOR_INTERVAL_SECONDS: int = 30
 
     # Detection
     DETECTION_ENABLED: bool = True

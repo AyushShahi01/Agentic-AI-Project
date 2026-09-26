@@ -78,9 +78,9 @@ const STATUS_LABELS = {
   AIRFLOW_ERROR: 'Airflow error',
 }
 
-export function StatusPill({ status, label, title }) {
+export function StatusPill({ status, label, title, tone }) {
   return (
-    <span className={`pill pill-${STATUS_TONES[status] ?? 'neutral'}`} title={title}>
+    <span className={`pill pill-${tone ?? STATUS_TONES[status] ?? 'neutral'}`} title={title}>
       <span className="pill-dot" aria-hidden="true" />
       {label ?? STATUS_LABELS[status] ?? status}
     </span>

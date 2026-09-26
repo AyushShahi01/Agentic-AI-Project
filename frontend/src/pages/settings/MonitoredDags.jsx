@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Badge, Button, Card, EmptyState, StatusPill, Toggle } from '../../components/ui'
+import { connectionState } from '../../connectionState'
 import { formatRelative } from '../../format'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
 import { airflowApi } from '../../services/endpoints'
 
 const PAGE_SIZE = 50
+const POLL_MS = 15000
 
 function SlaCell({ dag, canEdit, onSave }) {
   const [value, setValue] = useState(dag.sla_minutes ?? '')
@@ -59,19 +61,31 @@ export default function MonitoredDags() {
   const canOperate = hasRole('ADMIN', 'OPERATOR')
   const connectionId = params.get('connection')
   const connection = connections?.find((c) => c.id === connectionId)
+  const state = connection ? connectionState(connection, { everConnected: page?.total > 0 }) : null
+
+  const loadConnections = useCallback(
+    () =>
+      airflowApi
+        .listConnections()
+        .then(({ items }) => {
+          setConnections(items)
+          return items
+        })
+        .catch((err) => toast.error(err.message)),
+    [toast],
+  )
 
   useEffect(() => {
-    airflowApi
-      .listConnections()
-      .then(({ items }) => {
-        setConnections(items)
-        if (!params.get('connection') && items.length) {
-          const preferred = items.find((c) => c.is_default) ?? items[0]
-          setParams({ connection: preferred.id }, { replace: true })
-        }
-      })
-      .catch((err) => toast.error(err.message))
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load connections once on mount
+    loadConnections().then((items) => {
+      if (items?.length && !params.get('connection')) {
+        const preferred = items.find((c) => c.is_default) ?? items[0]
+        setParams({ connection: preferred.id }, { replace: true })
+      }
+    })
+    // Keep the connection status current so the table hides as soon as Airflow goes away.
+    const timer = setInterval(() => document.visibilityState === 'visible' && loadConnections(), POLL_MS)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- set up once on mount
   }, [])
 
   const loadDags = useCallback(async () => {
@@ -101,6 +115,21 @@ export default function MonitoredDags() {
       const r = await airflowApi.syncDags(connectionId)
       toast.success(`Synced ${r.total} DAGs: ${r.created} new, ${r.updated} updated, ${r.missing} missing`)
       await loadDags()
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      await loadConnections()
+      setSyncing(false)
+    }
+  }
+
+  async function onRetry() {
+    setSyncing(true)
+    try {
+      const updated = await airflowApi.refreshConnection(connectionId)
+      if (updated.is_live) toast.success(`${updated.name} is connected`)
+      else toast.error(`${updated.name}: ${updated.last_health_message ?? 'still not reachable'}`)
+      await Promise.all([loadConnections(), loadDags()])
     } catch (err) {
       toast.error(err.message)
     } finally {
@@ -181,7 +210,7 @@ export default function MonitoredDags() {
               ))}
             </select>
           </label>
-          {connection && <StatusPill status={connection.last_health_status} />}
+          {state && <StatusPill tone={state.tone} label={state.label} title={state.message ?? state.hint} />}
           <span className="spacer" />
           <input
             type="search"
@@ -206,7 +235,18 @@ export default function MonitoredDags() {
           </label>
         </div>
 
-        {!page ? (
+        {state && !state.live ? (
+          <EmptyState title={state.label}>
+            <p>{state.hint}</p>
+            {state.message && <p className="muted small">{state.message}</p>}
+            <p className="muted small">Last checked {formatRelative(connection.last_checked_at)}</p>
+            {canOperate && connection.is_active && (
+              <Button size="sm" onClick={onRetry} loading={syncing}>
+                Retry now
+              </Button>
+            )}
+          </EmptyState>
+        ) : !page ? (
           <p className="muted">Loading…</p>
         ) : page.total === 0 ? (
           <EmptyState title={search || monitoredOnly ? 'No DAGs match the filters' : 'No DAGs synced yet'}>

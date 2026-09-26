@@ -13,15 +13,18 @@ import '@xyflow/react/dist/style.css'
 import '../../components/flow/FlowCanvas.css'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { Alert, Badge, Button, EmptyState, Toggle } from '../../components/ui'
+import { Alert, Badge, Button, EmptyState, StatusPill, Toggle } from '../../components/ui'
+import { connectionState } from '../../connectionState'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
+import { formatRelative } from '../../format'
 import { airflowApi, automationApi, incidentsApi } from '../../services/endpoints'
 import { ConnectionNode, DagNode, MonitorNode, WorkflowNode } from './pipelineNodes'
 import { attachBody, buildPipeline, detachBody } from './pipelineModel'
 
 const NODE_TYPES = { conn: ConnectionNode, dag: DagNode, monitor: MonitorNode, workflow: WorkflowNode }
 const DRAG_TYPE = 'application/x-monitor-block'
+const POLL_MS = 15000
 const EDGE_OPTIONS = { markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } }
 const MONITORS = [
   { kind: 'failure', icon: '⚠', label: 'Failure monitor', hint: 'Incident when a run fails' },
@@ -53,7 +56,18 @@ function SlaEditor({ dag, onSave, disabled }) {
   )
 }
 
-function Panel({ node, canEdit, busy, onAttach, onDetach, onSetSla, onRemoveDraft, showUnmonitored, setShowUnmonitored }) {
+function Panel({
+  node,
+  canEdit,
+  busy,
+  onAttach,
+  onDetach,
+  onSetSla,
+  onRemoveDraft,
+  onRetry,
+  showUnmonitored,
+  setShowUnmonitored,
+}) {
   if (!node) {
     return (
       <>
@@ -77,13 +91,26 @@ function Panel({ node, canEdit, busy, onAttach, onDetach, onSetSla, onRemoveDraf
   }
   const { data } = node
   if (node.type === 'conn') {
+    const { conn, state } = data
     return (
       <>
-        <strong>{data.conn.name}</strong>
+        <strong>{conn.name}</strong>
         <p className="muted small">
-          {data.conn.environment} · {data.conn.kind === 'MOCK' ? 'mock' : data.conn.base_url}
+          {conn.environment} · {conn.kind === 'MOCK' ? 'mock' : conn.base_url}
         </p>
-        <p className="small">{data.conn.last_health_message ?? 'Not tested yet.'}</p>
+        <p>
+          <StatusPill tone={state.tone} label={state.label} />
+        </p>
+        {state.hint && <p className="small">{state.hint}</p>}
+        {state.message && <p className="muted small">{state.message}</p>}
+        <p className="muted small">Last checked {formatRelative(conn.last_checked_at)}</p>
+        {canEdit && !state.live && (
+          <p>
+            <Button size="sm" loading={busy} disabled={busy} onClick={() => onRetry(conn)}>
+              Retry now
+            </Button>
+          </p>
+        )}
         <Link className="small" to="/settings/connections">
           Manage connections
         </Link>
@@ -185,6 +212,7 @@ function Canvas() {
 
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
+  const [refreshError, setRefreshError] = useState(null)
   const [drafts, setDrafts] = useState([])
   const [showUnmonitored, setShowUnmonitored] = useState(true)
   const [selectedId, setSelectedId] = useState(null)
@@ -193,7 +221,11 @@ function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const fitted = useRef(false)
 
+  const loading = useRef(false)
+  const hasData = useRef(false)
   const load = useCallback(async () => {
+    if (loading.current) return
+    loading.current = true
     try {
       const [{ items: connections }, workflows, openCounts] = await Promise.all([
         airflowApi.listConnections(),
@@ -203,6 +235,7 @@ function Canvas() {
       const dagPages = await Promise.all(connections.map((c) => airflowApi.listDags(c.id, { limit: 200 })))
       const counts = {}
       openCounts.forEach((c) => (counts[`${c.connection_id}:${c.dag_id}:${c.type}`] = c.count))
+      hasData.current = true
       setData({
         connections: connections.filter((c) => c.is_active),
         dagsByConnection: Object.fromEntries(connections.map((c, i) => [c.id, dagPages[i].items])),
@@ -210,15 +243,42 @@ function Canvas() {
         counts,
       })
       setError(null)
+      setRefreshError(null)
     } catch (err) {
-      setError(err.message)
+      // Keep the last good diagram on a failed background refresh, but say so.
+      if (hasData.current) setRefreshError(err.message)
+      else setError(err.message)
+    } finally {
+      loading.current = false
     }
   }, [])
 
   useEffect(() => {
     // eslint-disable-next-line react/set-state-in-effect -- initial fetch; state is set after await
     load()
+    // Poll so the canvas follows Airflow going down or coming back; skip while the tab is hidden.
+    const refresh = () => document.visibilityState === 'visible' && load()
+    const timer = setInterval(refresh, POLL_MS)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
   }, [load])
+
+  async function retry(conn) {
+    setBusy(true)
+    try {
+      const updated = await airflowApi.refreshConnection(conn.id)
+      if (updated.is_live) toast.success(`${conn.name} is connected`)
+      else toast.error(`${conn.name}: ${updated.last_health_message ?? 'still not reachable'}`)
+      await load()
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   // Rebuild the diagram when data changes, keeping positions the user dragged to.
   useEffect(() => {
@@ -320,98 +380,132 @@ function Canvas() {
   }
 
   const selected = nodes.find((n) => n.id === selectedId)
+  const offline = data.connections
+    .map((conn) => ({
+      conn,
+      state: connectionState(conn, {
+        everConnected: (data.dagsByConnection[conn.id] ?? []).some((d) => d.last_synced_at),
+      }),
+    }))
+    .filter(({ state }) => !state.live)
 
   return (
-    <div className={`editor-shell ${canEdit ? '' : 'editor-readonly'}`}>
-      {canEdit && (
-        <aside className="editor-palette" aria-label="Monitor blocks">
-          <p className="muted small">Drag a monitor onto the canvas, then connect a DAG to it.</p>
-          <div className="palette-group">
-            <div className="palette-title">Monitors</div>
-            {MONITORS.map((m) => (
-              <button
-                key={m.kind}
-                type="button"
-                className={`palette-item pnode-monitor-${m.kind}`}
-                draggable
-                title={m.hint}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData(DRAG_TYPE, m.kind)
-                  e.dataTransfer.effectAllowed = 'move'
-                }}
-                onClick={() => addDraft(m.kind)}
-              >
-                <span className="block-icon" aria-hidden="true">
-                  {m.icon}
-                </span>
-                <span>{m.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="palette-group">
-            <div className="palette-title muted">Coming in Plan 4</div>
-            {['Row count', 'Null rate', 'Schema drift'].map((label) => (
-              <button key={label} type="button" className="palette-item" disabled title="Data-quality monitors (Plan 4)">
-                <span className="block-icon" aria-hidden="true">
-                  ▦
-                </span>
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
+    <>
+      {refreshError && (
+        <Alert tone="danger">Could not refresh pipelines: {refreshError}. Showing the last loaded view.</Alert>
       )}
+      {offline.length > 0 && (
+        <Alert tone="danger">
+          <div className="connection-banner">
+            <span>
+              {offline.map(({ conn, state }, i) => (
+                <span key={conn.id}>
+                  {i > 0 && ' · '}
+                  <strong>{conn.name}</strong>: {state.label}
+                </span>
+              ))}
+              {offline.length === 1 ? '. Its pipelines are' : '. Their pipelines are'} hidden until Airflow responds.
+            </span>
+            {canEdit && offline.length === 1 && (
+              <Button size="sm" loading={busy} disabled={busy} onClick={() => retry(offline[0].conn)}>
+                Retry now
+              </Button>
+            )}
+          </div>
+        </Alert>
+      )}
+      <div className={`editor-shell ${canEdit ? '' : 'editor-readonly'}`}>
+        {canEdit && (
+          <aside className="editor-palette" aria-label="Monitor blocks">
+            <p className="muted small">Drag a monitor onto the canvas, then connect a DAG to it.</p>
+            <div className="palette-group">
+              <div className="palette-title">Monitors</div>
+              {MONITORS.map((m) => (
+                <button
+                  key={m.kind}
+                  type="button"
+                  className={`palette-item pnode-monitor-${m.kind}`}
+                  draggable
+                  title={m.hint}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(DRAG_TYPE, m.kind)
+                    e.dataTransfer.effectAllowed = 'move'
+                  }}
+                  onClick={() => addDraft(m.kind)}
+                >
+                  <span className="block-icon" aria-hidden="true">
+                    {m.icon}
+                  </span>
+                  <span>{m.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className="palette-group">
+              <div className="palette-title muted">Coming in Plan 4</div>
+              {['Row count', 'Null rate', 'Schema drift'].map((label) => (
+                <button key={label} type="button" className="palette-item" disabled title="Data-quality monitors (Plan 4)">
+                  <span className="block-icon" aria-hidden="true">
+                    ▦
+                  </span>
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+        )}
 
-      <div
-        className="editor-canvas"
-        ref={wrapper}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault()
-          const kind = e.dataTransfer.getData(DRAG_TYPE)
-          if (kind && canEdit) addDraft(kind, screenToFlowPosition({ x: e.clientX - 100, y: e.clientY - 30 }))
-        }}
-      >
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={NODE_TYPES}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          onDelete={onDelete}
-          onSelectionChange={({ nodes: ns }) => setSelectedId(ns.length === 1 ? ns[0].id : null)}
-          nodesConnectable={canEdit}
-          deleteKeyCode={canEdit ? ['Backspace', 'Delete'] : null}
-          defaultEdgeOptions={EDGE_OPTIONS}
-          colorMode="system"
-          minZoom={0.15}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background gap={20} />
-          <Controls showInteractive={false} />
-          <MiniMap pannable zoomable className="editor-minimap" />
-        </ReactFlow>
-      </div>
-
-      <aside className="editor-panel" aria-label="Details">
-        <Panel
-          node={selected}
-          canEdit={canEdit}
-          busy={busy}
-          onAttach={attach}
-          onDetach={detach}
-          onSetSla={(dag, minutes) => patchDag(dag, { sla_minutes: minutes }, `SLA for ${dag.dag_id} set to ${minutes} min`)}
-          onRemoveDraft={(id) => {
-            setDrafts((list) => list.filter((d) => d.id !== id))
-            setSelectedId(null)
+        <div
+          className="editor-canvas"
+          ref={wrapper}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault()
+            const kind = e.dataTransfer.getData(DRAG_TYPE)
+            if (kind && canEdit) addDraft(kind, screenToFlowPosition({ x: e.clientX - 100, y: e.clientY - 30 }))
           }}
-          showUnmonitored={showUnmonitored}
-          setShowUnmonitored={setShowUnmonitored}
-        />
-      </aside>
-    </div>
+        >
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={NODE_TYPES}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            isValidConnection={isValidConnection}
+            onDelete={onDelete}
+            onSelectionChange={({ nodes: ns }) => setSelectedId(ns.length === 1 ? ns[0].id : null)}
+            nodesConnectable={canEdit}
+            deleteKeyCode={canEdit ? ['Backspace', 'Delete'] : null}
+            defaultEdgeOptions={EDGE_OPTIONS}
+            colorMode="system"
+            minZoom={0.15}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background gap={20} />
+            <Controls showInteractive={false} />
+            <MiniMap pannable zoomable className="editor-minimap" />
+          </ReactFlow>
+        </div>
+
+        <aside className="editor-panel" aria-label="Details">
+          <Panel
+            node={selected}
+            canEdit={canEdit}
+            busy={busy}
+            onAttach={attach}
+            onDetach={detach}
+            onSetSla={(dag, minutes) => patchDag(dag, { sla_minutes: minutes }, `SLA for ${dag.dag_id} set to ${minutes} min`)}
+            onRemoveDraft={(id) => {
+              setDrafts((list) => list.filter((d) => d.id !== id))
+              setSelectedId(null)
+            }}
+            onRetry={retry}
+            showUnmonitored={showUnmonitored}
+            setShowUnmonitored={setShowUnmonitored}
+          />
+        </aside>
+      </div>
+    </>
   )
 }
 

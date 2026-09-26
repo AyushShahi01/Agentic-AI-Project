@@ -5,15 +5,18 @@ import { Badge, StatusPill } from '../../components/ui'
 // Node components for the pipeline canvas: Airflow connection → DAG → monitor → automation.
 
 export const ConnectionNode = memo(function ConnectionNode({ data, selected }) {
-  const { conn } = data
+  const { conn, state } = data
   return (
-    <div className={`pnode pnode-conn ${selected ? 'pnode-selected' : ''}`}>
+    <div
+      className={`pnode pnode-conn ${state.live ? '' : `pnode-offline pnode-offline-${state.tone}`} ${selected ? 'pnode-selected' : ''}`}
+    >
       <div className="pnode-kicker">Airflow</div>
       <div className="pnode-title">{conn.name}</div>
       <div className="pnode-meta">
         <Badge tone={conn.environment === 'PROD' ? 'danger' : 'neutral'}>{conn.environment}</Badge>
-        <StatusPill status={conn.last_health_status} />
+        <StatusPill tone={state.tone} label={state.label} title={state.message ?? state.hint} />
       </div>
+      {!state.live && <div className="pnode-offline-note small">Pipelines hidden until Airflow is reachable.</div>}
       <Handle type="source" position={Position.Right} isConnectable={false} />
     </div>
   )

@@ -34,6 +34,7 @@ export const airflowApi = {
   deleteConnection: (id) => api.delete(`/airflow/connections/${id}`),
   testUnsaved: (data) => api.post('/airflow/test-connection', data),
   testSaved: (id) => api.post(`/airflow/connections/${id}/test`),
+  refreshConnection: (id) => api.post(`/airflow/connections/${id}/refresh`),
   syncDags: (id) => api.post(`/airflow/connections/${id}/sync-dags`),
   listDags: (id, query) => api.get(`/airflow/connections/${id}/dags`, query),
   setMonitored: (dagPk, isMonitored) =>

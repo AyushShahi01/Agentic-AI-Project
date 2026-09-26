@@ -56,7 +56,11 @@ def health(db: DbSession, _: ViewerUser) -> HealthStatusResponse:
         )
         for c in connections
     ]
-    degraded = database.status != "ok" or any(a.status not in _OK_STATUSES for a in airflow)
+    degraded = (
+        database.status != "ok"
+        or any(a.status not in _OK_STATUSES for a in airflow)
+        or any(c.status_stale for c in connections)  # the connection monitor is not reporting
+    )
     return HealthStatusResponse(
         status="degraded" if degraded else "ok",
         version=settings.VERSION,

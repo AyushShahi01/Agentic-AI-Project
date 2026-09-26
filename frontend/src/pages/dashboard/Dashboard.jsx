@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router'
 import { Card, StatusPill } from '../../components/ui'
+import { connectionState } from '../../connectionState'
 import { formatRelative } from '../../format'
 import { useAuth } from '../../context/AuthContext'
 import { airflowApi, detectionApi } from '../../services/endpoints'
@@ -21,7 +22,7 @@ export default function Dashboard() {
   const { health, incidentSummary, automationSummary } = useOutletContext()
   const { user } = useAuth()
   const [connections, setConnections] = useState(null)
-  const [dagStats, setDagStats] = useState({ synced: 0, monitored: 0 })
+  const [dagStats, setDagStats] = useState(null)
   const [error, setError] = useState(null)
   const [detection, setDetection] = useState(null)
 
@@ -34,8 +35,9 @@ export default function Dashboard() {
           .then((d) => !cancelled && setDetection(d))
           .catch(() => {})
         const { items } = await airflowApi.listConnections()
+        // DAG counts only from connections Airflow is answering for; others would be stale.
         const stats = await Promise.all(
-          items.map(async (c) => {
+          items.filter((c) => c.is_live).map(async (c) => {
             const [all, monitored] = await Promise.all([
               airflowApi.listDags(c.id, { limit: 1 }),
               airflowApi.listDags(c.id, { limit: 1, monitored: true }),
@@ -48,7 +50,7 @@ export default function Dashboard() {
         setDagStats(
           stats.reduce(
             (acc, s) => ({ synced: acc.synced + s.synced, monitored: acc.monitored + s.monitored }),
-            { synced: 0, monitored: 0 },
+            { synced: 0, monitored: 0, live: stats.length },
           ),
         )
       } catch (err) {
@@ -67,7 +69,7 @@ export default function Dashboard() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1>Welcome, {user.full_name.split(' ')[0]}</h1>
+          <h1>Welcome, {user?.full_name ? user.full_name.split(' ')[0] : 'Operator'}</h1>
           <p className="muted">Platform foundation status</p>
         </div>
       </div>
@@ -89,14 +91,33 @@ export default function Dashboard() {
         <Card title="Airflow connections">
           <div className="stat-value">{connections?.length ?? '—'}</div>
           <div className="pill-row">
-            {health?.airflow.map((a) => (
-              <StatusPill key={a.id} status={a.status} label={a.name} title={a.message ?? a.status} />
-            ))}
+            {connections
+              ?.filter((c) => c.is_active)
+              .map((c) => {
+                const state = connectionState(c)
+                return (
+                  <StatusPill
+                    key={c.id}
+                    tone={state.tone}
+                    label={`${c.name}: ${state.label}`}
+                    title={state.message ?? state.hint}
+                  />
+                )
+              })}
           </div>
         </Card>
         <Card title="DAGs">
-          <div className="stat-value">{dagStats.monitored}</div>
-          <p className="muted small">monitored of {dagStats.synced} synced</p>
+          {dagStats?.live ? (
+            <>
+              <div className="stat-value">{dagStats.monitored}</div>
+              <p className="muted small">monitored of {dagStats.synced} in Airflow</p>
+            </>
+          ) : (
+            <>
+              <div className="stat-value">—</div>
+              <p className="muted small">{dagStats ? 'Airflow not connected' : 'Checking…'}</p>
+            </>
+          )}
         </Card>
         <Card title="Open incidents" actions={<Link to="/incidents" className="small">View all</Link>}>
           <div className="stat-value">{incidentSummary?.open_total ?? '—'}</div>
@@ -151,14 +172,14 @@ export default function Dashboard() {
             <Link to="/settings/connections">Register an Airflow connection</Link>
           </Step>
           <Step done={tested}>Test the connection until it reports Healthy</Step>
-          <Step done={dagStats.synced > 0}>
+          <Step done={Boolean(dagStats?.synced > 0)}>
             <Link to="/settings/dags">Sync DAGs</Link> from Airflow
           </Step>
-          <Step done={dagStats.monitored > 0}>Mark the DAGs you want monitored</Step>
+          <Step done={Boolean(dagStats?.monitored > 0)}>Mark the DAGs you want monitored</Step>
           <Step done={Boolean(detection?.last_cycle)}>
             Detection has run (automatically, or via <Link to="/incidents">Run detection now</Link>)
           </Step>
-          <Step done={automationSummary?.enabled_workflows > 0}>
+          <Step done={Boolean(automationSummary?.enabled_workflows > 0)}>
             <Link to="/automation/workflows">Turn on an automation workflow</Link> (try dry run first)
           </Step>
         </ol>

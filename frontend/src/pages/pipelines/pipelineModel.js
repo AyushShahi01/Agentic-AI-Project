@@ -1,6 +1,8 @@
 // Builds the pipeline canvas (connection → DAG → monitors → automations) from API records.
 // Pure functions: no React, no fetching.
 
+import { connectionState } from '../../connectionState'
+
 const X = { conn: 0, dag: 320, monitor: 660, workflow: 1010 }
 const MONITOR_ROW = 110
 const DAG_GAP = 30
@@ -91,7 +93,10 @@ export function buildPipeline({ connections, dagsByConnection, workflows, counts
   let y = 0
 
   connections.forEach((conn) => {
-    const dags = (dagsByConnection[conn.id] ?? []).filter((d) => d.is_present && (showUnmonitored || d.is_monitored))
+    const known = dagsByConnection[conn.id] ?? []
+    const state = connectionState(conn, { everConnected: known.some((d) => d.last_synced_at) })
+    // Only a live connection's DAGs are current; otherwise show the connection alone with its status.
+    const dags = state.live ? known.filter((d) => d.is_present && (showUnmonitored || d.is_monitored)) : []
     const top = y
     dags.forEach((dag) => {
       const kinds = monitorsOf(dag)
@@ -132,7 +137,7 @@ export function buildPipeline({ connections, dagsByConnection, workflows, counts
       type: 'conn',
       position: { x: X.conn, y: (top + bottom) / 2 },
       deletable: false,
-      data: { conn },
+      data: { conn, state },
     })
     y += DAG_GAP * 2
   })
