@@ -22,52 +22,266 @@ import {
   fromFlow,
   isTrigger,
   nextNodeId,
+  parseBlockPayload,
+  retypeNode,
   toFlow,
 } from '../../components/flow/graph'
 import { layeredLayout } from '../../components/flow/layout'
 import { Alert, Badge, Button } from '../../components/ui'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
-import { automationApi } from '../../services/endpoints'
+import { channelState, connectionState, databaseState } from '../../connectionState'
+import { airflowApi, automationApi, channelsApi, databaseApi } from '../../services/endpoints'
+import { CHANNEL_KINDS, ENGINES } from '../connections/engines'
 import BlockNode from './BlockNode'
-import { nodeIcon } from './automationText'
+import { nodeIcon, startsByHand } from './automationText'
 
 const NODE_TYPES = { [BLOCK]: BlockNode }
 const EDGE_OPTIONS = { markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 } }
+// Never zoom past 100% when fitting: a small graph at 2x makes new blocks cover existing ports.
+const FIT_VIEW = { padding: 0.2, maxZoom: 1 }
 const DRAG_TYPE = 'application/x-workflow-block'
-const CATEGORY_ORDER = ['trigger', 'logic', 'diagnosis', 'approval', 'action', 'verify', 'output']
+// Orchestration blocks first; the incident-response blocks (diagnose, fix) come last.
+const CATEGORY_ORDER = ['trigger', 'pipeline', 'database', 'logic', 'approval', 'verify', 'output', 'diagnosis', 'action']
 const CATEGORY_TITLES = {
   trigger: 'Start when…',
-  logic: 'Decide',
-  diagnosis: 'Diagnose',
+  pipeline: 'Pipelines (Airflow)',
+  database: 'Databases',
+  logic: 'Decide & wait',
+  diagnosis: 'Diagnose an incident',
   approval: 'Ask a human',
-  action: 'Fix (Airflow)',
+  action: "Fix the incident's DAG",
   verify: 'Check',
   output: 'Record & notify',
 }
 const DIRTY_CHANGES = new Set(['position', 'remove', 'add', 'replace'])
+// Replaced in the palette by the real DAGs and databases (still valid in saved workflows).
+const HIDDEN_IN_PALETTE = new Set(['pipeline.run_dag', 'pipeline.wait_for_dag', 'database.run_sql', 'database.check'])
+// What a DAG or database block can be switched between in its settings.
+const SWITCHES = {
+  pipeline: [
+    ['pipeline.run_dag', 'Run this DAG'],
+    ['pipeline.wait_for_dag', 'Wait for it to succeed'],
+  ],
+  database: [
+    ['database.run_sql', 'Run SQL'],
+    ['database.check', 'Check data'],
+  ],
+}
+
+/** Live Airflow DAGs and databases for the palette, loaded once per editor visit. */
+function useSources() {
+  const [sources, setSources] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const [airflow, databases, channels] = await Promise.allSettled([
+        airflowApi.listConnections(),
+        databaseApi.listConnections(),
+        channelsApi.listConnections(),
+      ])
+      const conns = airflow.status === 'fulfilled' ? airflow.value.items.filter((c) => c.is_active) : []
+      const withDags = await Promise.all(
+        conns.map(async (conn) => {
+          const state = connectionState(conn)
+          if (!state.live) return { conn, state, dags: [] }
+          try {
+            const dags = await airflowApi.listAllDags(conn.id)
+            return { conn, state, dags: dags.filter((d) => d.is_present) }
+          } catch {
+            return { conn, state, dags: [] }
+          }
+        }),
+      )
+      const dbs = databases.status === 'fulfilled' ? databases.value.items.filter((c) => c.is_active) : []
+      const chans = channels.status === 'fulfilled' ? channels.value.items.filter((c) => c.is_active) : []
+      if (!cancelled) {
+        setSources({
+          airflow: withDags,
+          databases: dbs.map((conn) => ({ conn, state: databaseState(conn) })),
+          channels: chans.map((conn) => ({ conn, state: channelState(conn) })),
+        })
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return sources
+}
+
+function dagPreset(conn, dag) {
+  return {
+    type: 'pipeline.run_dag',
+    name: dag.dag_id,
+    idBase: dag.dag_id,
+    config: { connection_id: conn.id, dag_id: dag.dag_id },
+  }
+}
+
+function databasePreset(conn) {
+  return { type: 'database.run_sql', name: conn.name, idBase: conn.name, config: { connection_id: conn.id } }
+}
+
+function channelPreset(conn) {
+  return { type: 'notify', name: conn.name, idBase: `notify_${conn.name}`, config: { send_via: conn.id } }
+}
+
+/** "Record & notify": each catalog channel as its own "Tell someone via …" component. */
+function ChannelSources({ sources, onAdd }) {
+  if (!sources) return null
+  if (!sources.channels.length) {
+    return (
+      <p className="muted small">
+        To message people, <Link to="/connections?type=channel">add an email, Slack or Teams channel</Link>.
+      </p>
+    )
+  }
+  return sources.channels.map(({ conn, state }) => (
+    <SourceItem
+      key={conn.id}
+      category="output"
+      preset={channelPreset(conn)}
+      title={`Tell someone via ${conn.name} (${state.label})`}
+      onAdd={onAdd}
+    >
+      <span className="palette-source-name">{conn.name}</span>
+      <span className="palette-tag">{CHANNEL_KINDS[conn.kind]?.label ?? conn.kind}</span>
+    </SourceItem>
+  ))
+}
+
+function SourceItem({ category, preset, title, children, onAdd }) {
+  return (
+    <button
+      type="button"
+      className={`palette-item palette-source block-${category}`}
+      draggable
+      title={title}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(preset))
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onClick={() => onAdd(preset)}
+    >
+      <span className="block-icon" aria-hidden="true">
+        {nodeIcon(preset.type)}
+      </span>
+      {children}
+    </button>
+  )
+}
+
+function PipelineSources({ sources, onAdd }) {
+  const [query, setQuery] = useState('')
+  if (!sources) return <p className="muted small">Loading DAGs…</p>
+  if (!sources.airflow.length) {
+    return (
+      <p className="muted small">
+        No Airflow connections. <Link to="/connections">Add one in the Catalog</Link>.
+      </p>
+    )
+  }
+  const q = query.trim().toLowerCase()
+  const total = sources.airflow.reduce((n, s) => n + s.dags.length, 0)
+  return (
+    <>
+      {total > 6 && (
+        <input
+          type="search"
+          className="palette-search"
+          placeholder="Search DAGs"
+          aria-label="Search DAGs"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
+      {sources.airflow.map(({ conn, state, dags }) => {
+        const shown = dags.filter((d) => !q || d.dag_id.toLowerCase().includes(q))
+        return (
+          <div key={conn.id} className="palette-source-group">
+            <div className={`palette-source-head ${state.live ? '' : 'palette-source-off'}`} title={state.message ?? state.hint}>
+              {conn.name} · {conn.environment.toLowerCase()}
+              {!state.live && <span> — {state.label}</span>}
+            </div>
+            {state.live && dags.length === 0 && <p className="muted small">No DAGs synced yet.</p>}
+            {shown.map((dag) => (
+              <SourceItem
+                key={dag.id}
+                category="pipeline"
+                preset={dagPreset(conn, dag)}
+                title={`${dag.dag_id}\n${dag.description ?? 'Run it (or wait for it) in a workflow'}`}
+                onAdd={onAdd}
+              >
+                <span className="palette-source-name mono">{dag.dag_id}</span>
+                {dag.is_paused && <span className="palette-tag">paused</span>}
+              </SourceItem>
+            ))}
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+function DatabaseSources({ sources, onAdd }) {
+  if (!sources) return <p className="muted small">Loading databases…</p>
+  if (!sources.databases.length) {
+    return (
+      <p className="muted small">
+        No databases. <Link to="/connections">Add one in the Catalog</Link>.
+      </p>
+    )
+  }
+  return sources.databases.map(({ conn, state }) =>
+    state.live ? (
+      <SourceItem
+        key={conn.id}
+        category="database"
+        preset={databasePreset(conn)}
+        title={`${conn.host}:${conn.port}/${conn.database}`}
+        onAdd={onAdd}
+      >
+        <span className="palette-source-name">{conn.name}</span>
+        <span className="palette-tag">{ENGINES[conn.engine]?.label ?? conn.engine}</span>
+      </SourceItem>
+    ) : (
+      <div key={conn.id} className="palette-source-head palette-source-off" title={state.message ?? state.hint}>
+        {conn.name} — {state.label}
+      </div>
+    ),
+  )
+}
 
 function blankGraph(defs) {
-  const type = 'trigger.incident'
+  const type = 'trigger.manual'
   return {
     nodes: [{ id: 'trigger', type, config: defaultConfig(defs[type]?.config_schema), position: { x: 0, y: 0 } }],
     edges: [],
   }
 }
 
-function Palette({ catalog, hasTrigger, onAdd }) {
+function Palette({ catalog, trigger, sources, onAdd }) {
+  // Blocks that work on an incident only make sense under an incident trigger.
+  const incidentOnly = trigger && !trigger.needs_incident
   const groups = CATEGORY_ORDER.map((category) => ({
     category,
-    items: catalog.filter((d) => d.category === category),
-  })).filter((g) => g.items.length)
+    items: catalog.filter((d) => d.category === category && !HIDDEN_IN_PALETTE.has(d.type)),
+  })).filter((g) => g.items.length || SWITCHES[g.category])
   return (
     <aside className="editor-palette" aria-label="Blocks">
       <p className="muted small">Drag a block onto the canvas, or click to add it.</p>
       {groups.map(({ category, items }) => (
         <div key={category} className="palette-group">
           <div className="palette-title">{CATEGORY_TITLES[category] ?? category}</div>
+          {category === 'pipeline' && <PipelineSources sources={sources} onAdd={onAdd} />}
+          {category === 'database' && <DatabaseSources sources={sources} onAdd={onAdd} />}
+          {category === 'output' && <ChannelSources sources={sources} onAdd={onAdd} />}
           {items.map((def) => {
-            const disabled = category === 'trigger' && hasTrigger
+            const needsIncident = incidentOnly && def.needs_incident && category !== 'trigger'
+            const disabled = (category === 'trigger' && Boolean(trigger)) || needsIncident
+            const why = category === 'trigger' ? 'A workflow has exactly one trigger' : 'Works on an incident: needs an incident trigger'
             return (
               <button
                 key={def.type}
@@ -75,7 +289,7 @@ function Palette({ catalog, hasTrigger, onAdd }) {
                 className={`palette-item block-${category}`}
                 draggable={!disabled}
                 disabled={disabled}
-                title={disabled ? 'A workflow has exactly one trigger' : def.description}
+                title={disabled ? why : def.description}
                 onDragStart={(e) => {
                   e.dataTransfer.setData(DRAG_TYPE, def.type)
                   e.dataTransfer.effectAllowed = 'move'
@@ -142,6 +356,7 @@ function Editor() {
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState(null)
+  const sources = useSources()
 
   const defs = useMemo(() => Object.fromEntries((catalog ?? []).map((d) => [d.type, d])), [catalog])
 
@@ -179,7 +394,7 @@ function Editor() {
         setProblems([])
         setDirty(isNew)
         setError(null)
-        requestAnimationFrame(() => fitView({ padding: 0.2, maxZoom: 1 }))
+        requestAnimationFrame(() => fitView(FIT_VIEW))
       } catch (err) {
         if (!cancelled) setError(err.message)
       }
@@ -232,9 +447,35 @@ function Editor() {
     [nodes, edges],
   )
 
-  const hasTrigger = nodes.some((n) => isTrigger(n.data.nodeType))
+  // React Flow re-subscribes (and re-fires) whenever this handler changes, so it must be stable,
+  // and it keeps the previous state when the selection did not change to avoid a render loop.
+  const onSelectionChange = useCallback(({ nodes: ns, edges: es }) => {
+    const node = ns.length === 1 ? ns[0].id : null
+    const edge = ns.length === 0 && es.length === 1 ? es[0].id : null
+    setSelection((s) => (s.node === node && s.edge === edge ? s : { node, edge }))
+  }, [])
 
-  function addBlock(type, position) {
+  const triggerNode = nodes.find((n) => isTrigger(n.data.nodeType))
+  const hasTrigger = Boolean(triggerNode)
+  const canRun = hasRole('ADMIN', 'OPERATOR') && !isNew && workflow && startsByHand(workflow.graph)
+
+  async function runNow() {
+    setBusy('run')
+    try {
+      const run = await automationApi.runWorkflow(workflow.id)
+      if (run.status === 'FAILED') toast.error(`Run failed: ${run.error ?? 'see the steps'}`)
+      else toast.success(run.status === 'COMPLETED' ? 'Run completed' : 'Run started')
+      navigate(`/automation/runs/${run.id}`)
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** `block` is a type, or a palette preset `{type, name, config, idBase}` (a real DAG/database). */
+  function addBlock(block, position) {
+    const { type, name = '', config = {}, idBase } = typeof block === 'string' ? { type: block } : block
     if (isTrigger(type) && hasTrigger) return toast.error('A workflow has exactly one trigger')
     const def = defs[type]
     let at = position
@@ -244,7 +485,8 @@ function Editor() {
       const point = screenToFlowPosition(center)
       at = { x: point.x - 110 + (nodes.length % 5) * 20, y: point.y - 40 + (nodes.length % 5) * 20 }
     }
-    const nodeId = nextNodeId(type, nodes)
+    // Ids from real names (e.g. orders_pipeline_1) read well in {{results.<id>…}} placeholders.
+    const nodeId = nextNodeId(idBase ? `x.${idBase.replaceAll('.', '_').slice(0, 80)}` : type, nodes)
     setNodes((current) => [
       ...current.map((n) => ({ ...n, selected: false })),
       {
@@ -252,7 +494,7 @@ function Editor() {
         type: BLOCK,
         position: at,
         selected: true,
-        data: { nodeType: type, name: '', config: defaultConfig(def?.config_schema), def },
+        data: { nodeType: type, name, config: { ...defaultConfig(def?.config_schema), ...config }, def },
       },
     ])
     setSelection({ node: nodeId, edge: null })
@@ -261,9 +503,16 @@ function Editor() {
 
   function onDrop(event) {
     event.preventDefault()
-    const type = event.dataTransfer.getData(DRAG_TYPE)
-    if (!type || !canEdit) return
-    addBlock(type, screenToFlowPosition({ x: event.clientX - 110, y: event.clientY - 30 }))
+    const block = parseBlockPayload(event.dataTransfer.getData(DRAG_TYPE))
+    if (!block || !canEdit) return
+    addBlock(block, screenToFlowPosition({ x: event.clientX - 110, y: event.clientY - 30 }))
+  }
+
+  function changeType(node, type) {
+    const { node: updated, edges: kept } = retypeNode(node, defs[type], edges)
+    setNodes((current) => current.map((n) => (n.id === node.id ? updated : n)))
+    setEdges(kept)
+    setDirty(true)
   }
 
   function updateNodeData(nodeId, patch) {
@@ -296,7 +545,7 @@ function Editor() {
     const positions = layeredLayout(graph.nodes, graph.edges)
     setNodes((current) => current.map((n) => ({ ...n, position: positions[n.id] ?? n.position })))
     setDirty(true)
-    requestAnimationFrame(() => fitView({ padding: 0.2, maxZoom: 1, duration: 300 }))
+    requestAnimationFrame(() => fitView({ ...FIT_VIEW, duration: 300 }))
   }
 
   // ------------------------------------------------------------------ validate & save
@@ -391,6 +640,16 @@ function Editor() {
         {!canEdit && <Badge>read-only</Badge>}
         {dirty && canEdit && <Badge tone="warning">unsaved changes</Badge>}
         <span className="spacer" />
+        {canRun && (
+          <Button
+            onClick={runNow}
+            loading={busy === 'run'}
+            disabled={dirty}
+            title={dirty ? 'Save first: Run now runs the saved version' : 'Start a run now'}
+          >
+            ▶ Run now
+          </Button>
+        )}
         {canEdit && <Button onClick={autoLayout}>Tidy layout</Button>}
         <Button onClick={validate} loading={busy === 'validate'}>
           Validate
@@ -403,7 +662,12 @@ function Editor() {
       </div>
 
       <div className={`editor-shell ${canEdit ? '' : 'editor-readonly'}`}>
-        {canEdit && <Palette catalog={catalog} hasTrigger={hasTrigger} onAdd={(type) => addBlock(type)} />}
+        {canEdit && <Palette
+            catalog={catalog}
+            trigger={triggerNode && defs[triggerNode.data.nodeType]}
+            sources={sources}
+            onAdd={(block) => addBlock(block)}
+          />}
 
         <div className="editor-canvas" ref={wrapper} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
           <ReactFlow
@@ -414,12 +678,7 @@ function Editor() {
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
             isValidConnection={isValidConnection}
-            onSelectionChange={({ nodes: ns, edges: es }) =>
-              setSelection({
-                node: ns.length === 1 ? ns[0].id : null,
-                edge: ns.length === 0 && es.length === 1 ? es[0].id : null,
-              })
-            }
+            onSelectionChange={onSelectionChange}
             nodesDraggable={canEdit}
             nodesConnectable={canEdit}
             deleteKeyCode={canEdit ? ['Backspace', 'Delete'] : null}
@@ -427,6 +686,7 @@ function Editor() {
             colorMode="system"
             minZoom={0.2}
             fitView
+            fitViewOptions={FIT_VIEW}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={20} />
@@ -448,6 +708,22 @@ function Editor() {
                 </div>
               </div>
               {selectedDef?.description && <p className="muted small">{selectedDef.description}</p>}
+              {SWITCHES[selectedDef?.category] && (
+                <div className="segmented" role="group" aria-label="What this block does">
+                  {SWITCHES[selectedDef.category].map(([type, label]) => (
+                    <button
+                      key={type}
+                      type="button"
+                      className={selectedNode.data.nodeType === type ? 'active' : ''}
+                      aria-pressed={selectedNode.data.nodeType === type}
+                      disabled={!canEdit}
+                      onClick={() => selectedNode.data.nodeType !== type && changeType(selectedNode, type)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {selectedNode.data.problem && <Alert tone="danger">{selectedNode.data.problem}</Alert>}
               <div className="field">
                 <label htmlFor="block-name">Display name</label>

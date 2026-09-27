@@ -21,7 +21,14 @@ class NodeTypeRead(BaseModel):
     description: str
     ports: list[str]
     port_labels: dict[str, str]
+    needs_incident: bool = False
     config_schema: dict[str, Any]
+
+
+class ManualRunRequest(BaseModel):
+    """Start a run now; `dry_run` None follows the workflow's mode."""
+
+    dry_run: bool | None = None
 
 
 class TemplateRead(BaseModel):

@@ -1,5 +1,5 @@
-"""Automation engine: enqueue workflow runs for incident events, advance them step by step,
-and handle approvals, cancellation and workflow CRUD."""
+"""Automation engine: enqueue workflow runs (incident events, schedules, "Run now"), advance
+them step by step, and handle approvals, cancellation and workflow CRUD."""
 
 import logging
 import os
@@ -14,7 +14,13 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.automation.graph import ACTION_TYPES, GraphError, to_raw, validate_graph
+from app.automation.graph import (
+    ACTION_TYPES,
+    INCIDENT_TRIGGER_TYPES,
+    GraphError,
+    to_raw,
+    validate_graph,
+)
 from app.automation.templates import TEMPLATES, TEMPLATES_BY_KEY
 from app.automation.types import (
     ACTIVE_RUN_STATUSES,
@@ -296,26 +302,118 @@ def enqueue_for_incident(
             )
         ):
             continue
-        run = WorkflowRun(
-            id=uuid.uuid4(),
-            workflow_id=workflow.id,
-            workflow_version=workflow.version,
-            graph=workflow.graph,
-            incident_id=incident.id,
-            trigger_event=event.value,
-            dedup_key=dedup,
-            status=RunStatus.PENDING,
-            dry_run=workflow.mode == WorkflowMode.DRY_RUN or settings.AUTOMATION_FORCE_DRY_RUN,
-            current_node=validate_graph(workflow.graph).trigger_id,
-            context={},
-        )
-        try:
-            with db.begin_nested():
-                db.add(run)
-        except IntegrityError:
-            continue  # raced with another worker
-        runs.append(run)
+        run = _add_run(db, workflow, event, dedup, incident_id=incident.id)
+        if run is not None:
+            runs.append(run)
     return runs
+
+
+def _add_run(
+    db: Session,
+    workflow: Workflow,
+    event: TriggerEvent,
+    dedup: str,
+    *,
+    incident_id: uuid.UUID | None = None,
+    dry_run: bool | None = None,
+) -> WorkflowRun | None:
+    """Add a PENDING run; None if the dedup key was taken meanwhile (another worker)."""
+    settings = get_settings()
+    run = WorkflowRun(
+        id=uuid.uuid4(),
+        workflow_id=workflow.id,
+        workflow_version=workflow.version,
+        graph=workflow.graph,
+        incident_id=incident_id,
+        trigger_event=event.value,
+        dedup_key=dedup,
+        status=RunStatus.PENDING,
+        dry_run=(workflow.mode == WorkflowMode.DRY_RUN if dry_run is None else dry_run)
+        or settings.AUTOMATION_FORCE_DRY_RUN,
+        current_node=validate_graph(workflow.graph).trigger_id,
+        context={},
+    )
+    try:
+        with db.begin_nested():
+            db.add(run)
+    except IntegrityError:
+        return None
+    return run
+
+
+def _has_active_run(db: Session, workflow_id: uuid.UUID) -> bool:
+    return bool(
+        db.scalar(
+            select(WorkflowRun.id).where(
+                WorkflowRun.workflow_id == workflow_id,
+                WorkflowRun.status.in_(ACTIVE_RUN_STATUSES),
+            )
+        )
+    )
+
+
+def start_manual_run(
+    db: Session,
+    workflow_id: uuid.UUID,
+    *,
+    actor: User,
+    dry_run: bool | None = None,
+    now: datetime | None = None,
+) -> WorkflowRun:
+    """ "Run now": start a run of a manual or scheduled workflow and advance it right away.
+
+    Works while the workflow is turned off, so it can be tried before it is switched on.
+    """
+    if not get_settings().AUTOMATION_ENABLED:
+        raise BadRequestError("Automation is disabled on this server (AUTOMATION_ENABLED)")
+    workflow = get_workflow(db, workflow_id)
+    try:
+        trigger = validate_graph(workflow.graph).trigger
+    except GraphError as exc:
+        raise BadRequestError(f"The workflow is not valid: {exc}") from exc
+    if trigger.type in INCIDENT_TRIGGER_TYPES:
+        raise BadRequestError(
+            "This workflow starts from incidents; only “Run on demand” or “On a schedule” "
+            "workflows can be run by hand"
+        )
+    if _has_active_run(db, workflow.id):
+        raise ConflictError("This workflow is already running; wait for it or cancel it first")
+    run = _add_run(db, workflow, TriggerEvent.MANUAL, f"manual:{uuid.uuid4()}", dry_run=dry_run)
+    assert run is not None  # a fresh random dedup key cannot collide
+    audit_service.record(
+        db,
+        action="automation.run_manual",
+        entity_type="workflow_run",
+        entity_id=run.id,
+        actor=actor,
+        details={"workflow": workflow.name, "dry_run": run.dry_run},
+    )
+    db.commit()
+    return run_now(db, run.id, now=now) or run
+
+
+def _enqueue_scheduled(db: Session, now: datetime) -> int:
+    """One run per schedule slot for each enabled scheduled workflow that is not busy."""
+    count = 0
+    for workflow in db.scalars(select(Workflow).where(Workflow.enabled.is_(True))).all():
+        try:
+            trigger = validate_graph(workflow.graph).trigger
+        except GraphError:
+            continue
+        if trigger.type != "trigger.schedule":
+            continue
+        slot = int(now.timestamp()) // (trigger.config["every_minutes"] * 60)
+        dedup = f"schedule:{trigger.config['every_minutes']}:{slot}"
+        if _has_active_run(db, workflow.id) or db.scalar(
+            select(WorkflowRun.id).where(
+                WorkflowRun.workflow_id == workflow.id, WorkflowRun.dedup_key == dedup
+            )
+        ):
+            continue
+        if _add_run(db, workflow, TriggerEvent.SCHEDULE, dedup) is not None:
+            count += 1
+    db.commit()
+    return count
 
 
 def _enqueue_stale(db: Session, now: datetime) -> int:
@@ -422,19 +520,24 @@ def _advance(db: Session, run: WorkflowRun, now: datetime, max_steps: int) -> No
     if run.status.is_terminal:
         return
     incident = run.incident
-    if incident is None:
+    if run.incident_id is not None and incident is None:
         _finish(db, run, RunStatus.FAILED, now, error="The incident no longer exists")
         return
     graph = validate_graph(run.graph)
     if run.status == RunStatus.PENDING:
         run.status = RunStatus.RUNNING
         run.started_at = now
-        incident_service.add_event(
-            db,
-            incident,
-            "automation_started",
-            details={"workflow": run.workflow_name, "run_id": str(run.id), "dry_run": run.dry_run},
-        )
+        if incident is not None:
+            incident_service.add_event(
+                db,
+                incident,
+                "automation_started",
+                details={
+                    "workflow": run.workflow_name,
+                    "run_id": str(run.id),
+                    "dry_run": run.dry_run,
+                },
+            )
         audit_service.record(
             db,
             action="automation.run_started",
@@ -442,7 +545,7 @@ def _advance(db: Session, run: WorkflowRun, now: datetime, max_steps: int) -> No
             entity_id=run.id,
             details={
                 "workflow": run.workflow_name,
-                "incident_id": str(incident.id),
+                **({"incident_id": str(incident.id)} if incident is not None else {}),
                 "trigger": run.trigger_event,
                 "dry_run": run.dry_run,
             },
@@ -458,7 +561,11 @@ def _advance(db: Session, run: WorkflowRun, now: datetime, max_steps: int) -> No
         node = graph.nodes[run.current_node or graph.trigger_id]
         step = _waiting_step(run, node.id)
 
-        if node.type in _NEEDS_OPEN_INCIDENT and incident.status == IncidentStatus.RESOLVED:
+        if (
+            incident is not None
+            and node.type in _NEEDS_OPEN_INCIDENT
+            and incident.status == IncidentStatus.RESOLVED
+        ):
             if step is not None:
                 step.status = StepStatus.SKIPPED
                 step.finished_at = now
@@ -541,13 +648,13 @@ def run_now(db: Session, run_id: uuid.UUID, *, now: datetime | None = None) -> W
 
 
 def tick(db: Session, *, now: datetime | None = None) -> TickSummary:
-    """Enqueue stale triggers and advance every due run."""
+    """Enqueue stale and scheduled triggers and advance every due run."""
     started = time.perf_counter()
     now = now or utcnow()
     summary = TickSummary()
     if not get_settings().AUTOMATION_ENABLED:
         return summary
-    summary.enqueued = _enqueue_stale(db, now)
+    summary.enqueued = _enqueue_stale(db, now) + _enqueue_scheduled(db, now)
     for run_id in _candidates(db, now):
         try:
             run = run_now(db, run_id, now=now)

@@ -12,6 +12,7 @@ from app.models.automation import (
     WorkflowRun,
     WorkflowStep,
 )
+from app.models.database_connection import DatabaseConnection, DatabaseEngine
 from app.models.incident import (
     DetectionLease,
     EvidenceKind,
@@ -23,6 +24,7 @@ from app.models.incident import (
     IncidentStatus,
     IncidentType,
 )
+from app.models.notification_channel import ChannelKind, ChannelStatus, NotificationChannel
 from app.models.user import RefreshToken, User, UserRole
 
 __all__ = [
@@ -30,7 +32,11 @@ __all__ = [
     "AirflowConnection",
     "Approval",
     "AuditLog",
+    "ChannelKind",
+    "ChannelStatus",
     "ConnectionKind",
+    "DatabaseConnection",
+    "DatabaseEngine",
     "DeploymentEnvironment",
     "DetectionLease",
     "EvidenceKind",
@@ -42,6 +48,7 @@ __all__ = [
     "IncidentStatus",
     "IncidentType",
     "MonitoredDag",
+    "NotificationChannel",
     "Notification",
     "RefreshToken",
     "User",

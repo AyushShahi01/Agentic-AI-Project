@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
 import { formatRelative } from '../../format'
 import { automationApi } from '../../services/endpoints'
-import { duration } from './automationText'
+import { duration, triggerText } from './automationText'
 import { RunStatusBadge } from './automationUi'
 
 const PAGE_SIZE = 50
@@ -52,7 +52,7 @@ export function RunTable({ runs, showIncident = true }) {
                   )}
                 </td>
               )}
-              <td className="small">{r.trigger_event}</td>
+              <td className="small">{triggerText(r.trigger_event)}</td>
               <td className="small">{formatRelative(r.started_at ?? r.created_at)}</td>
               <td className="small">{duration(r)}</td>
             </tr>
@@ -113,7 +113,7 @@ export default function RunList() {
       <div className="page-header">
         <div>
           <h1>Automation runs</h1>
-          <p className="muted">Every time a workflow ran for an incident, step by step.</p>
+          <p className="muted">Every time a workflow ran, step by step.</p>
         </div>
         {hasRole('ADMIN', 'OPERATOR') && (
           <Button onClick={onTick} loading={ticking} title="Advance waiting runs now instead of on the next cycle">
@@ -149,7 +149,7 @@ export default function RunList() {
         {!page ? (
           <p className="muted">Loading…</p>
         ) : page.total === 0 ? (
-          <EmptyState title="No runs yet">Runs appear when an enabled workflow is triggered by an incident.</EmptyState>
+          <EmptyState title="No runs yet">Runs appear when you press Run now, on a schedule, or when an incident starts a workflow.</EmptyState>
         ) : (
           <>
             <RunTable runs={page.items} />

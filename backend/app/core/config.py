@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     AIRFLOW_MONITOR_ENABLED: bool = True
     AIRFLOW_MONITOR_INTERVAL_SECONDS: int = 30
 
+    # Database connections (catalog). Empty allowlist = any host. The connection monitor
+    # re-checks them on the same interval as Airflow connections.
+    DB_CONNECTION_ALLOWED_HOSTS: list[str] = []
+    DB_CONNECT_TIMEOUT_SECONDS: int = 5
+
     # Detection
     DETECTION_ENABLED: bool = True
     DETECTION_INTERVAL_SECONDS: int = 120
@@ -72,6 +77,9 @@ class Settings(BaseSettings):
     AUTOMATION_VERIFY_POLL_SECONDS: int = 60
     AUTOMATION_WEBHOOK_ALLOWED_HOSTS: list[str] = []
     AUTOMATION_WEBHOOK_TIMEOUT_SECONDS: float = 5
+    # Where people open the app; used for links in emails/Slack/Teams (run and approval pages).
+    PUBLIC_APP_URL: str = "http://localhost:5173"
+    SMTP_TIMEOUT_SECONDS: float = 10
 
     @model_validator(mode="after")
     def _check_production_safety(self) -> "Settings":

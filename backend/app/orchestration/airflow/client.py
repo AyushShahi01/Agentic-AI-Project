@@ -228,11 +228,13 @@ class LiveAirflowAdapter:
                 if item.get("task_id")
             ]
 
-    async def trigger_dag_run(self, dag_id: str, *, note: str | None = None) -> AirflowDagRun:
+    async def trigger_dag_run(
+        self, dag_id: str, *, note: str | None = None, conf: dict[str, Any] | None = None
+    ) -> AirflowDagRun:
         async with self._client() as client:
             api_version, _ = await self._detect_version(client)
             headers = await self._auth_headers(client, api_version)
-            body: dict[str, Any] = {"conf": {}}
+            body: dict[str, Any] = {"conf": conf or {}}
             if api_version == ApiVersion.V2:
                 body["logical_date"] = None  # required field in Airflow 3; null = "now"
             if note:

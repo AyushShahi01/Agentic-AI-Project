@@ -6,7 +6,7 @@ Kept free of FastAPI/SQLAlchemy imports so orchestration logic stays framework-i
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -177,7 +177,9 @@ class AirflowAdapter(Protocol):
         """Clear (retry) task instances of one run. Returns the cleared task ids."""
         ...
 
-    async def trigger_dag_run(self, dag_id: str, *, note: str | None = None) -> AirflowDagRun: ...
+    async def trigger_dag_run(
+        self, dag_id: str, *, note: str | None = None, conf: dict[str, Any] | None = None
+    ) -> AirflowDagRun: ...
 
     async def set_dag_paused(self, dag_id: str, paused: bool) -> None: ...
 

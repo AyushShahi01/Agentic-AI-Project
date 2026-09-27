@@ -423,8 +423,8 @@ def apply_remote_dags(
         seen.add(remote.dag_id)
         dag = existing.get(remote.dag_id)
         if dag is None:
-            dag = MonitoredDag(connection_id=conn.id, dag_id=remote.dag_id, is_monitored=False)
-            db.add(dag)
+            dag = MonitoredDag(dag_id=remote.dag_id, is_monitored=False)
+            conn.dags.append(dag)  # keeps `conn.dags` current for later calls in this session
             created += 1
         else:
             updated += 1

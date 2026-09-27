@@ -6,7 +6,7 @@ import { useToast } from '../../context/ToastContext'
 import { formatDateTime, formatRelative } from '../../format'
 import { automationApi } from '../../services/endpoints'
 import { ApprovalCard } from './Approvals'
-import { NODE_LABELS, describeConfig, duration, nodeIcon } from './automationText'
+import { NODE_LABELS, describeConfig, duration, nodeIcon, triggerText } from './automationText'
 import { ApprovalStatusBadge, RunStatusBadge } from './automationUi'
 
 // The canvas pulls in React Flow; load it only when a run is opened.
@@ -134,7 +134,7 @@ export default function RunDetail() {
         <dl className="kv kv-grid">
           <div className="kv-row">
             <dt>Triggered by</dt>
-            <dd>incident {run.trigger_event}</dd>
+            <dd>{triggerText(run.trigger_event)}</dd>
           </div>
           <div className="kv-row">
             <dt>Started</dt>

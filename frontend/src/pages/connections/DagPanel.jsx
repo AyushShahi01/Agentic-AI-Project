@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
-import { Badge, Button, Card, EmptyState, StatusPill, Toggle } from '../../components/ui'
+import { Badge, Button, EmptyState, Toggle } from '../../components/ui'
 import { connectionState } from '../../connectionState'
 import { formatRelative } from '../../format'
 import { useAuth } from '../../context/AuthContext'
@@ -8,7 +7,6 @@ import { useToast } from '../../context/ToastContext'
 import { airflowApi } from '../../services/endpoints'
 
 const PAGE_SIZE = 50
-const POLL_MS = 15000
 
 function SlaCell({ dag, canEdit, onSave }) {
   const [value, setValue] = useState(dag.sla_minutes ?? '')
@@ -46,11 +44,14 @@ function SlaCell({ dag, canEdit, onSave }) {
   )
 }
 
-export default function MonitoredDags() {
+/**
+ * The DAGs of one Airflow connection, shown inside the connection catalog. Monitored DAGs are
+ * the input for failure and SLA detection. `onConnectionChanged` reloads the catalog after a
+ * sync or retry changed the connection's health.
+ */
+export default function DagPanel({ connection, onConnectionChanged }) {
   const { hasRole } = useAuth()
   const toast = useToast()
-  const [params, setParams] = useSearchParams()
-  const [connections, setConnections] = useState(null)
   const [page, setPage] = useState(null)
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
@@ -59,40 +60,12 @@ export default function MonitoredDags() {
   const [pending, setPending] = useState(() => new Set())
 
   const canOperate = hasRole('ADMIN', 'OPERATOR')
-  const connectionId = params.get('connection')
-  const connection = connections?.find((c) => c.id === connectionId)
-  const state = connection ? connectionState(connection, { everConnected: page?.total > 0 }) : null
-
-  const loadConnections = useCallback(
-    () =>
-      airflowApi
-        .listConnections()
-        .then(({ items }) => {
-          setConnections(items)
-          return items
-        })
-        .catch((err) => toast.error(err.message)),
-    [toast],
-  )
-
-  useEffect(() => {
-    loadConnections().then((items) => {
-      if (items?.length && !params.get('connection')) {
-        const preferred = items.find((c) => c.is_default) ?? items[0]
-        setParams({ connection: preferred.id }, { replace: true })
-      }
-    })
-    // Keep the connection status current so the table hides as soon as Airflow goes away.
-    const timer = setInterval(() => document.visibilityState === 'visible' && loadConnections(), POLL_MS)
-    return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- set up once on mount
-  }, [])
+  const state = connectionState(connection, { everConnected: page?.total > 0 })
 
   const loadDags = useCallback(async () => {
-    if (!connectionId) return
     try {
       setPage(
-        await airflowApi.listDags(connectionId, {
+        await airflowApi.listDags(connection.id, {
           limit: PAGE_SIZE,
           offset,
           search: search.trim(),
@@ -102,7 +75,7 @@ export default function MonitoredDags() {
     } catch (err) {
       toast.error(err.message)
     }
-  }, [connectionId, offset, search, monitoredOnly, toast])
+  }, [connection.id, offset, search, monitoredOnly, toast])
 
   useEffect(() => {
     const timer = setTimeout(loadDags, 200) // debounce search typing
@@ -112,13 +85,13 @@ export default function MonitoredDags() {
   async function onSync() {
     setSyncing(true)
     try {
-      const r = await airflowApi.syncDags(connectionId)
+      const r = await airflowApi.syncDags(connection.id)
       toast.success(`Synced ${r.total} DAGs: ${r.created} new, ${r.updated} updated, ${r.missing} missing`)
       await loadDags()
     } catch (err) {
       toast.error(err.message)
     } finally {
-      await loadConnections()
+      await onConnectionChanged()
       setSyncing(false)
     }
   }
@@ -126,10 +99,10 @@ export default function MonitoredDags() {
   async function onRetry() {
     setSyncing(true)
     try {
-      const updated = await airflowApi.refreshConnection(connectionId)
+      const updated = await airflowApi.refreshConnection(connection.id)
       if (updated.is_live) toast.success(`${updated.name} is connected`)
       else toast.error(`${updated.name}: ${updated.last_health_message ?? 'still not reachable'}`)
-      await Promise.all([loadConnections(), loadDags()])
+      await Promise.all([onConnectionChanged(), loadDags()])
     } catch (err) {
       toast.error(err.message)
     } finally {
@@ -137,11 +110,12 @@ export default function MonitoredDags() {
     }
   }
 
-  async function onToggle(dag, value) {
+  async function updateDag(dag, changes) {
     setPending((s) => new Set(s).add(dag.id))
     try {
-      const updated = await airflowApi.setMonitored(dag.id, value)
+      const updated = await airflowApi.updateDag(dag.id, changes)
       setPage((p) => ({ ...p, items: p.items.map((d) => (d.id === updated.id ? updated : d)) }))
+      return updated
     } catch (err) {
       toast.error(err.message)
     } finally {
@@ -155,164 +129,133 @@ export default function MonitoredDags() {
 
   async function onSaveSla(dag, minutes, validationError) {
     if (validationError) return toast.error(validationError)
-    try {
-      const updated = await airflowApi.setSla(dag.id, minutes)
-      setPage((p) => ({ ...p, items: p.items.map((d) => (d.id === updated.id ? updated : d)) }))
+    if (await updateDag(dag, { sla_minutes: minutes })) {
       toast.success(minutes ? `SLA for ${dag.dag_id}: ${minutes} min` : `SLA removed for ${dag.dag_id}`)
-    } catch (err) {
-      toast.error(err.message)
     }
   }
 
-  if (connections && connections.length === 0) {
+  if (!state.live) {
     return (
-      <div className="page">
-        <h1>Monitored DAGs</h1>
-        <Card>
-          <EmptyState title="No Airflow connections">
-            <Link to="/settings/connections">Register a connection</Link> first.
-          </EmptyState>
-        </Card>
-      </div>
+      <EmptyState title={state.label}>
+        <p>{state.hint}</p>
+        {state.message && <p className="muted small">{state.message}</p>}
+        <p className="muted small">Last checked {formatRelative(connection.last_checked_at)}</p>
+        {canOperate && connection.is_active && (
+          <Button size="sm" onClick={onRetry} loading={syncing}>
+            Retry now
+          </Button>
+        )}
+      </EmptyState>
     )
   }
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <div>
-          <h1>Monitored DAGs</h1>
-          <p className="muted">Monitored DAGs are the input for failure and SLA detection.</p>
-        </div>
-        {canOperate && connectionId && (
-          <Button variant="primary" onClick={onSync} loading={syncing} disabled={connection && !connection.is_active}>
+    <div className="dag-panel">
+      <div className="toolbar">
+        <input
+          type="search"
+          placeholder="Search DAG id or description"
+          value={search}
+          onChange={(e) => {
+            setOffset(0)
+            setSearch(e.target.value)
+          }}
+          aria-label="Search DAGs"
+        />
+        <label className="checkbox-inline">
+          <input
+            type="checkbox"
+            checked={monitoredOnly}
+            onChange={(e) => {
+              setOffset(0)
+              setMonitoredOnly(e.target.checked)
+            }}
+          />
+          Monitored only
+        </label>
+        <span className="spacer" />
+        {canOperate && (
+          <Button size="sm" onClick={onSync} loading={syncing}>
             Sync DAGs
           </Button>
         )}
       </div>
 
-      <Card>
-        <div className="toolbar">
-          <label className="inline-field">
-            <span>Connection</span>
-            <select
-              value={connectionId ?? ''}
-              onChange={(e) => {
-                setOffset(0)
-                setParams({ connection: e.target.value })
-              }}
-            >
-              {connections?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.is_default ? ' (default)' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-          {state && <StatusPill tone={state.tone} label={state.label} title={state.message ?? state.hint} />}
-          <span className="spacer" />
-          <input
-            type="search"
-            placeholder="Search DAG id or description"
-            value={search}
-            onChange={(e) => {
-              setOffset(0)
-              setSearch(e.target.value)
-            }}
-            aria-label="Search DAGs"
-          />
-          <label className="checkbox-inline">
-            <input
-              type="checkbox"
-              checked={monitoredOnly}
-              onChange={(e) => {
-                setOffset(0)
-                setMonitoredOnly(e.target.checked)
-              }}
-            />
-            Monitored only
-          </label>
-        </div>
-
-        {state && !state.live ? (
-          <EmptyState title={state.label}>
-            <p>{state.hint}</p>
-            {state.message && <p className="muted small">{state.message}</p>}
-            <p className="muted small">Last checked {formatRelative(connection.last_checked_at)}</p>
-            {canOperate && connection.is_active && (
-              <Button size="sm" onClick={onRetry} loading={syncing}>
-                Retry now
-              </Button>
-            )}
-          </EmptyState>
-        ) : !page ? (
-          <p className="muted">Loading…</p>
-        ) : page.total === 0 ? (
-          <EmptyState title={search || monitoredOnly ? 'No DAGs match the filters' : 'No DAGs synced yet'}>
-            {!search && !monitoredOnly && (canOperate ? 'Use “Sync DAGs” to import them from Airflow.' : 'An operator needs to sync DAGs.')}
-          </EmptyState>
-        ) : (
-          <>
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Monitor</th>
-                    <th>DAG</th>
-                    <th>Schedule</th>
-                    <th title="Freshness SLA in minutes">SLA (min)</th>
-                    <th>State</th>
-                    <th>Tags</th>
-                    <th>Synced</th>
+      {!page ? (
+        <p className="muted">Loading…</p>
+      ) : page.total === 0 ? (
+        <EmptyState title={search || monitoredOnly ? 'No DAGs match the filters' : 'No DAGs synced yet'}>
+          {!search && !monitoredOnly && (canOperate ? 'Use “Sync DAGs” to import them from Airflow.' : 'An operator needs to sync DAGs.')}
+        </EmptyState>
+      ) : (
+        <>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Monitor</th>
+                  <th>DAG</th>
+                  <th title="Open an incident when a run fails">Alert on failure</th>
+                  <th title="Freshness SLA in minutes">SLA (min)</th>
+                  <th>State</th>
+                  <th>Schedule</th>
+                  <th>Tags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {page.items.map((d) => (
+                  <tr key={d.id} className={d.is_present ? '' : 'row-muted'}>
+                    <td>
+                      <Toggle
+                        checked={d.is_monitored}
+                        disabled={!canOperate || pending.has(d.id)}
+                        onChange={(v) => updateDag(d, { is_monitored: v })}
+                        label={`Monitor ${d.dag_id}`}
+                      />
+                    </td>
+                    <td>
+                      <div className="cell-title mono">{d.dag_id}</div>
+                      {d.description && <div className="muted small clamp">{d.description}</div>}
+                    </td>
+                    <td title={d.is_monitored ? '' : 'Turn on monitoring first'}>
+                      <Toggle
+                        checked={d.is_monitored && d.detect_failures}
+                        disabled={!canOperate || !d.is_monitored || pending.has(d.id)}
+                        onChange={(v) => updateDag(d, { detect_failures: v })}
+                        label={`Alert on failures of ${d.dag_id}`}
+                      />
+                    </td>
+                    <td>
+                      <SlaCell
+                        key={`${d.id}:${d.sla_minutes}`}
+                        dag={d}
+                        canEdit={canOperate}
+                        onSave={(minutes, error) => onSaveSla(d, minutes, error)}
+                      />
+                    </td>
+                    <td>
+                      {!d.is_present ? (
+                        <Badge tone="danger" title="Not returned by Airflow on the last sync">missing</Badge>
+                      ) : d.is_paused ? (
+                        <Badge tone="warning">paused</Badge>
+                      ) : (
+                        <Badge tone="success">active</Badge>
+                      )}
+                    </td>
+                    <td className="mono small">{d.schedule_summary ?? '—'}</td>
+                    <td>
+                      <div className="tag-list">
+                        {d.tags.map((t) => (
+                          <Badge key={t}>{t}</Badge>
+                        ))}
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {page.items.map((d) => (
-                    <tr key={d.id} className={d.is_present ? '' : 'row-muted'}>
-                      <td>
-                        <Toggle
-                          checked={d.is_monitored}
-                          disabled={!canOperate || pending.has(d.id)}
-                          onChange={(v) => onToggle(d, v)}
-                          label={`Monitor ${d.dag_id}`}
-                        />
-                      </td>
-                      <td>
-                        <div className="cell-title mono">{d.dag_id}</div>
-                        {d.description && <div className="muted small clamp">{d.description}</div>}
-                      </td>
-                      <td className="mono small">{d.schedule_summary ?? '—'}</td>
-                      <td>
-                        <SlaCell
-                          key={`${d.id}:${d.sla_minutes}`}
-                          dag={d}
-                          canEdit={canOperate}
-                          onSave={(minutes, error) => onSaveSla(d, minutes, error)}
-                        />
-                      </td>
-                      <td>
-                        {!d.is_present ? (
-                          <Badge tone="danger" title="Not returned by Airflow on the last sync">missing</Badge>
-                        ) : d.is_paused ? (
-                          <Badge tone="warning">paused</Badge>
-                        ) : (
-                          <Badge tone="success">active</Badge>
-                        )}
-                      </td>
-                      <td>
-                        <div className="tag-list">
-                          {d.tags.map((t) => (
-                            <Badge key={t}>{t}</Badge>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="small">{formatRelative(d.last_synced_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {page.total > PAGE_SIZE && (
             <div className="pager">
               <span className="muted small">
                 {offset + 1}–{Math.min(offset + PAGE_SIZE, page.total)} of {page.total}
@@ -324,9 +267,9 @@ export default function MonitoredDags() {
                 Next
               </Button>
             </div>
-          </>
-        )}
-      </Card>
+          )}
+        </>
+      )}
     </div>
   )
 }

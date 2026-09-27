@@ -127,12 +127,100 @@ a:focus-visible {
   display: grid;
   grid-template-columns: 230px 1fr;
   min-height: 100vh;
+  transition: grid-template-columns 0.18s ease;
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 64px 1fr;
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   padding: 1rem 0.75rem;
+  overflow: hidden auto;
   background: var(--surface);
   border-right: 1px solid var(--border);
+}
+
+.sidebar nav {
+  flex: 1;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-icon {
+  flex: none;
+}
+
+.nav-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding: 0.45rem 0.6rem;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: 6px;
+}
+
+.sidebar-toggle:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* Collapsed: icons only. Section titles become thin dividers, badges become corner dots. */
+.sidebar-collapsed .sidebar {
+  padding-inline: 0.5rem;
+}
+
+.sidebar-collapsed .nav-label {
+  display: none;
+}
+
+.sidebar-collapsed .brand,
+.sidebar-collapsed .nav-link,
+.sidebar-collapsed .sidebar-toggle {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.sidebar-collapsed .nav-section {
+  height: 1px;
+  margin: 0.75rem 0.35rem;
+  overflow: hidden;
+  color: transparent;
+  background: var(--border);
+}
+
+.sidebar-collapsed .nav-link {
+  position: relative;
+}
+
+.sidebar-collapsed .nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  min-width: 1rem;
+  padding: 0 0.25rem;
+  font-size: 0.6rem;
+  line-height: 1rem;
 }
 
 .sidebar nav {
@@ -246,14 +334,56 @@ a:focus-visible {
   margin: 0.25rem 0 0;
 }
 
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Connection catalog: an Airflow row expands into its DAG list. */
+.catalog-table .row-open td {
+  background: var(--accent-soft);
+}
+
+.catalog-table .row-detail > td {
+  padding: 0.75rem 1rem 1rem;
+  background: var(--surface-2);
+}
+
+.dag-panel .table {
+  background: var(--surface);
+}
+
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
 
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+  }
+
   .sidebar nav {
     flex-flow: row wrap;
+    align-items: center;
     margin-top: 0.75rem;
+  }
+
+  .nav-group {
+    display: contents;
+  }
+
+  .sidebar-toggle {
+    display: none;
+  }
+
+  .sidebar-collapsed .nav-label {
+    display: inline;
   }
 
   .nav-section {
@@ -919,10 +1049,11 @@ textarea {
 .nav-link {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.6rem;
 }
 
 .nav-badge {
+  margin-left: auto;
   min-width: 1.4rem;
   padding: 0 0.4rem;
   color: #fff;

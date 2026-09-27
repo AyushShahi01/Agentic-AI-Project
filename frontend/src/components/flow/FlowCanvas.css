@@ -3,6 +3,8 @@
 :root {
   --cat-trigger: #7c3aed;
   --cat-logic: #0e7490;
+  --cat-pipeline: #4338ca;
+  --cat-database: #a21caf;
   --cat-diagnosis: #2563eb;
   --cat-approval: #b45309;
   --cat-action: #c2410c;
@@ -14,6 +16,8 @@
   :root {
     --cat-trigger: #a78bfa;
     --cat-logic: #22d3ee;
+    --cat-pipeline: #818cf8;
+    --cat-database: #e879f9;
     --cat-diagnosis: #60a5fa;
     --cat-approval: #fbbf24;
     --cat-action: #fb923c;
@@ -191,6 +195,16 @@
 .block-approval,
 .palette-item.block-approval {
   --cat: var(--cat-approval);
+}
+
+.block-pipeline,
+.palette-item.block-pipeline {
+  --cat: var(--cat-pipeline);
+}
+
+.block-database,
+.palette-item.block-database {
+  --cat: var(--cat-database);
 }
 
 .block-action,
@@ -580,4 +594,92 @@
 .react-flow__edge-text {
   font-size: 11px;
   fill: var(--text-muted);
+}
+
+/* SQL / JSON fields in the block settings panel */
+.code-input {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre;
+  resize: vertical;
+}
+
+/* Palette: real DAGs and databases from the catalog */
+.palette-search {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.palette-source-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.palette-source-head {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.palette-source-off {
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+.palette-source-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-source .palette-source-name.mono {
+  font-size: 0.78rem;
+}
+
+.palette-tag {
+  flex: none;
+  margin-left: auto;
+  padding: 0 0.35rem;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  background: var(--neutral-soft);
+  border-radius: 999px;
+}
+
+/* Block settings: "Run this DAG | Wait for it to succeed" */
+.segmented {
+  display: flex;
+  margin: 0.25rem 0 0.5rem;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.segmented button {
+  flex: 1;
+  padding: 0.35rem 0.4rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: 6px;
+}
+
+.segmented button.active {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.segmented button:disabled {
+  cursor: default;
 }

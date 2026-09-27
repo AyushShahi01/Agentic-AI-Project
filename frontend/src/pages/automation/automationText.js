@@ -3,6 +3,13 @@
 export const NODE_LABELS = {
   'trigger.incident': 'When an incident opens or recurs',
   'trigger.incident_stale': 'When an incident is ignored',
+  'trigger.manual': 'Run on demand',
+  'trigger.schedule': 'On a schedule',
+  'pipeline.run_dag': 'Run a DAG',
+  'pipeline.wait_for_dag': 'Wait for a DAG',
+  'database.run_sql': 'Run SQL',
+  'database.check': 'Check data',
+  'flow.wait': 'Wait',
   'condition.filter': 'Only if…',
   'diagnose.classify_log': 'Figure out why',
   'check.dag_state': 'Check the DAG',
@@ -25,6 +32,25 @@ export const NODE_ICONS = {
   verify: '✓',
   incident: '✎',
   notify: '✉',
+  pipeline: '▶',
+  database: '🗄',
+  flow: '⏱',
+}
+
+// Workflows with these triggers are started by people or the clock, not by incidents.
+const BY_HAND_TRIGGERS = new Set(['trigger.manual', 'trigger.schedule'])
+
+export function triggerType(graph) {
+  return graph?.nodes?.find((n) => n.type?.startsWith('trigger.'))?.type ?? null
+}
+
+export function startsByHand(graph) {
+  return BY_HAND_TRIGGERS.has(triggerType(graph))
+}
+
+function shortSql(sql = '') {
+  const oneLine = sql.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 48 ? `${oneLine.slice(0, 47)}…` : oneLine
 }
 
 export function nodeIcon(type) {
@@ -55,6 +81,36 @@ export function describeConfig(type, config = {}) {
     case 'trigger.incident_stale':
       parts.push(`open & unacknowledged for ${config.minutes} min`)
       break
+    case 'trigger.manual':
+      parts.push('when someone presses Run now')
+      break
+    case 'trigger.schedule':
+      parts.push(
+        config.every_minutes % 60 === 0
+          ? `every ${config.every_minutes / 60 === 1 ? 'hour' : `${config.every_minutes / 60} h`}`
+          : `every ${config.every_minutes} min`,
+      )
+      break
+    case 'pipeline.run_dag':
+      parts.push(config.dag_id || 'choose a DAG')
+      if (config.parameters && config.parameters.trim() !== '{}') parts.push('with parameters')
+      parts.push(config.wait_for_completion ? `wait ≤ ${config.timeout_minutes} min` : "don't wait")
+      break
+    case 'pipeline.wait_for_dag':
+      parts.push(config.dag_id || 'choose a DAG')
+      parts.push(`success in last ${config.success_within_minutes} min`)
+      break
+    case 'database.run_sql':
+      parts.push(shortSql(config.sql) || 'enter SQL')
+      if (config.read_only) parts.push('read only')
+      break
+    case 'database.check':
+      parts.push(`${shortSql(config.sql) || 'enter SQL'} ${config.operator ?? '>'} ${config.expected ?? '0'}`)
+      if (config.keep_checking_minutes) parts.push(`keep checking ${config.keep_checking_minutes} min`)
+      break
+    case 'flow.wait':
+      parts.push(`${config.minutes} min`)
+      break
     case 'condition.filter':
       if (config.diagnosis_categories?.length) parts.push(list(config.diagnosis_categories))
       if (config.environments?.length) parts.push(`env ${config.environments.join('/')}`)
@@ -72,6 +128,7 @@ export function describeConfig(type, config = {}) {
           : 'always required',
       )
       parts.push(`expires after ${config.timeout_minutes} min`)
+      if (config.send_via) parts.push(config.to?.length ? `asks ${config.to.join(', ')}` : 'request sent out')
       break
     case 'action.clear_failed_tasks':
       parts.push(config.include_downstream ? 'with downstream tasks' : 'failed tasks only')
@@ -86,11 +143,20 @@ export function describeConfig(type, config = {}) {
       parts.push(config.operation)
       break
     case 'notify':
-      parts.push(`${config.channel === 'webhook' ? 'webhook' : 'in-app'}, ${config.level?.toLowerCase()}`)
+      if (config.send_via) parts.push(config.to?.length ? `to ${config.to.join(', ')}` : 'sent out')
+      else parts.push(config.channel === 'webhook' ? 'webhook' : 'in-app only')
+      parts.push(config.level?.toLowerCase())
       break
     default:
   }
   return parts.filter(Boolean).join(' · ')
+}
+
+const TRIGGER_EVENTS = { manual: 'Run now', schedule: 'schedule' }
+
+/** How a run started: "Run now", "schedule", or "incident opened" etc. */
+export function triggerText(event) {
+  return TRIGGER_EVENTS[event] ?? `incident ${event}`
 }
 
 export function duration(run) {

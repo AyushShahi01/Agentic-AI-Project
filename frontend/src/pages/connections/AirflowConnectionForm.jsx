@@ -36,6 +36,12 @@ export function TestResult({ result }) {
             </dd>
           </>
         )}
+        {result.server_version && (
+          <>
+            <dt>Server</dt>
+            <dd>{result.server_version}</dd>
+          </>
+        )}
       </dl>
     </div>
   )

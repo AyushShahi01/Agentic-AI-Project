@@ -7,12 +7,13 @@ a port with no edge ends the run. This is also the contract for the Plan 3 canva
 Pure: Pydantic only, no database or framework imports.
 """
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.detection.types import IncidentSeverity, IncidentType
 from app.diagnosis.log_classifier import FailureCategory
@@ -52,12 +53,47 @@ class FilterConfig(_Config):
     diagnosis_categories: list[FailureCategory] = Field(default_factory=list)
 
 
+# `x-widget` / `x-label` / `x-hint` / `x-hidden` are UI hints for the canvas settings form.
+def _ui(label: str, widget: str | None = None, hint: str | None = None) -> dict[str, Any]:
+    extra: dict[str, Any] = {"x-label": label}
+    if widget:
+        extra["x-widget"] = widget
+    if hint:
+        extra["x-hint"] = hint
+    return extra
+
+
+_SEND_VIA_HINT = "A channel from the Catalog; empty = in-app only"
+_TO_HINT = "Email channels: addresses, comma separated; empty = the channel's default recipients"
+MAX_RECIPIENTS = 20
+
+
+def _recipients(values: list[str]) -> list[str]:
+    cleaned = [v.strip() for v in values if v.strip()]
+    if len(cleaned) > MAX_RECIPIENTS:
+        raise ValueError(f"At most {MAX_RECIPIENTS} recipients")
+    bad = [v for v in cleaned if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v)]
+    if bad:
+        raise ValueError(f"Not an email address: {', '.join(bad)}")
+    return cleaned
+
+
 class ApprovalConfig(_Config):
     # Approval is required when the connection environment is listed; empty = always required.
     required_environments: list[Literal["DEV", "STAGING", "PROD"]] = Field(
         default_factory=lambda: ["PROD"]
     )
     timeout_minutes: int = Field(default=60, ge=1, le=10080)
+    send_via: str = Field(
+        default="",
+        json_schema_extra=_ui("Also send the request via", "notification_channel", _SEND_VIA_HINT),
+    )
+    to: list[str] = Field(default_factory=list, json_schema_extra=_ui("To", hint=_TO_HINT))
+
+    @field_validator("to")
+    @classmethod
+    def _check_to(cls, value: list[str]) -> list[str]:
+        return _recipients(value)
 
 
 class ClearTasksConfig(_Config):
@@ -78,11 +114,24 @@ class IncidentUpdateConfig(_Config):
 
 
 class NotifyConfig(_Config):
-    channel: Literal["in_app", "webhook"] = "in_app"
+    send_via: str = Field(
+        default="", json_schema_extra=_ui("Send via", "notification_channel", _SEND_VIA_HINT)
+    )
+    to: list[str] = Field(default_factory=list, json_schema_extra=_ui("To", hint=_TO_HINT))
     level: Literal["INFO", "WARNING", "CRITICAL"] = "INFO"
-    title: str = Field(default="{{incident.title}}", min_length=1, max_length=300)
+    title: str = Field(default="{{workflow.name}}", min_length=1, max_length=300)
     message: str = Field(default="", max_length=4000)
-    url: str | None = Field(default=None, max_length=1000)
+    # Before notification channels: a raw JSON webhook typed into the block. Kept so saved
+    # workflows keep working; hidden in the form unless used.
+    channel: Literal["in_app", "webhook"] = Field(
+        default="in_app", json_schema_extra={"x-hidden": True}
+    )
+    url: str | None = Field(default=None, max_length=1000, json_schema_extra={"x-hidden": True})
+
+    @field_validator("to")
+    @classmethod
+    def _check_to(cls, value: list[str]) -> list[str]:
+        return _recipients(value)
 
     @field_validator("url")
     @classmethod
@@ -92,15 +141,139 @@ class NotifyConfig(_Config):
         return value
 
 
+# ---------------------------------------------------------------------- orchestration configs
+# `x-widget` / `x-label` / `x-hint` are UI hints for the canvas settings form.
+
+
+class ScheduleTriggerConfig(_Config):
+    every_minutes: int = Field(
+        default=60, ge=5, le=10080, json_schema_extra=_ui("Every (minutes)", hint="5 min to 7 days")
+    )
+
+
+class _AirflowTarget(_Config):
+    connection_id: str = Field(
+        default="", json_schema_extra=_ui("Airflow connection", "airflow_connection")
+    )
+    dag_id: str = Field(default="", max_length=250, json_schema_extra=_ui("DAG", "dag"))
+
+    @model_validator(mode="after")
+    def _chosen(self) -> "_AirflowTarget":
+        if not self.connection_id:
+            raise ValueError("Choose an Airflow connection")
+        if not self.dag_id:
+            raise ValueError("Choose a DAG")
+        return self
+
+
+class RunDagConfig(_AirflowTarget):
+    parameters: str = Field(
+        default="{}",
+        max_length=10000,
+        json_schema_extra=_ui("Run parameters (JSON)", "json", "Passed to the run as its conf"),
+    )
+    wait_for_completion: bool = Field(
+        default=True, json_schema_extra=_ui("Wait until the run finishes")
+    )
+    timeout_minutes: int = Field(
+        default=60, ge=1, le=1440, json_schema_extra=_ui("Give up after (minutes)")
+    )
+
+    @field_validator("parameters")
+    @classmethod
+    def _json_object(cls, value: str) -> str:
+        try:
+            parsed = json.loads(value or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Run parameters are not valid JSON: {exc.msg}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError('Run parameters must be a JSON object, e.g. {"date": "2026-01-31"}')
+        return value or "{}"
+
+
+class WaitForDagConfig(_AirflowTarget):
+    success_within_minutes: int = Field(
+        default=60,
+        ge=1,
+        le=10080,
+        json_schema_extra=_ui(
+            "Counts if it succeeded within (minutes)", hint="How recent the successful run must be"
+        ),
+    )
+    timeout_minutes: int = Field(
+        default=60, ge=1, le=1440, json_schema_extra=_ui("Give up after (minutes)")
+    )
+
+
+class _DatabaseTarget(_Config):
+    connection_id: str = Field(
+        default="", json_schema_extra=_ui("Database connection", "database_connection")
+    )
+    sql: str = Field(default="", max_length=20000, json_schema_extra=_ui("SQL", "sql"))
+
+    @model_validator(mode="after")
+    def _chosen(self) -> "_DatabaseTarget":
+        if not self.connection_id:
+            raise ValueError("Choose a database connection")
+        if not self.sql.strip():
+            raise ValueError("Enter the SQL to run")
+        return self
+
+
+class RunSqlConfig(_DatabaseTarget):
+    read_only: bool = Field(
+        default=False,
+        json_schema_extra=_ui(
+            "Read only", hint="Runs in a read-only transaction; needs no approval"
+        ),
+    )
+    timeout_seconds: int = Field(
+        default=60, ge=1, le=3600, json_schema_extra=_ui("Timeout (seconds)")
+    )
+
+
+class CheckDataConfig(_DatabaseTarget):
+    operator: Literal[">", ">=", "=", "!=", "<", "<="] = Field(
+        default=">", json_schema_extra=_ui("Result must be")
+    )
+    expected: str = Field(default="0", max_length=200, json_schema_extra=_ui("Compared with"))
+    keep_checking_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=1440,
+        json_schema_extra=_ui(
+            "Keep checking for (minutes)", hint="0 = check once; otherwise wait until it passes"
+        ),
+    )
+
+
+class WaitConfig(_Config):
+    minutes: int = Field(default=5, ge=1, le=1440, json_schema_extra=_ui("Minutes"))
+
+
 @dataclass(frozen=True)
 class NodeType:
     type: str
     label: str
-    category: Literal["trigger", "logic", "diagnosis", "approval", "action", "verify", "output"]
+    category: Literal[
+        "trigger",
+        "logic",
+        "pipeline",
+        "database",
+        "diagnosis",
+        "approval",
+        "action",
+        "verify",
+        "output",
+    ]
     description: str
     ports: tuple[str, ...]
     config_model: type[_Config] = NoConfig
     port_labels: dict[str, str] = field(default_factory=dict)
+    # Works on the incident that started the run (only valid under an incident trigger).
+    needs_incident: bool = False
+    # Changes something outside the platform: policy-checked, simulated in dry runs.
+    is_action: bool = False
 
     def catalog_entry(self) -> dict[str, Any]:
         return {
@@ -110,6 +283,7 @@ class NodeType:
             "description": self.description,
             "ports": list(self.ports),
             "port_labels": self.port_labels,
+            "needs_incident": self.needs_incident,
             "config_schema": self.config_model.model_json_schema(),
         }
 
@@ -117,6 +291,7 @@ class NodeType:
 NODE_TYPES: dict[str, NodeType] = {
     t.type: t
     for t in (
+        # ------------------------------------------------------------ triggers
         NodeType(
             "trigger.incident",
             "When an incident opens or recurs",
@@ -124,6 +299,7 @@ NODE_TYPES: dict[str, NodeType] = {
             "Starts when detection opens an incident or records it again.",
             ("next",),
             IncidentTriggerConfig,
+            needs_incident=True,
         ),
         NodeType(
             "trigger.incident_stale",
@@ -132,7 +308,24 @@ NODE_TYPES: dict[str, NodeType] = {
             "Starts when an incident stays open and unacknowledged for too long.",
             ("next",),
             StaleTriggerConfig,
+            needs_incident=True,
         ),
+        NodeType(
+            "trigger.manual",
+            "Run on demand",
+            "trigger",
+            "Starts when someone presses “Run now” on the workflow.",
+            ("next",),
+        ),
+        NodeType(
+            "trigger.schedule",
+            "On a schedule",
+            "trigger",
+            "Starts every N minutes while the workflow is turned on.",
+            ("next",),
+            ScheduleTriggerConfig,
+        ),
+        # ------------------------------------------------------------ logic
         NodeType(
             "condition.filter",
             "Only if…",
@@ -141,21 +334,75 @@ NODE_TYPES: dict[str, NodeType] = {
             ("true", "false"),
             FilterConfig,
             {"true": "matches", "false": "does not match"},
+            needs_incident=True,
         ),
+        NodeType(
+            "check.dag_state",
+            "Check the DAG",
+            "logic",
+            "Asks Airflow whether the incident's DAG is paused or already has an active run.",
+            ("ready", "paused", "busy"),
+            port_labels={"ready": "not paused, idle", "paused": "paused", "busy": "run active"},
+            needs_incident=True,
+        ),
+        NodeType(
+            "flow.wait",
+            "Wait",
+            "logic",
+            "Pauses the workflow for a number of minutes, then continues.",
+            ("next",),
+            WaitConfig,
+        ),
+        # ------------------------------------------------------------ pipelines
+        NodeType(
+            "pipeline.run_dag",
+            "Run a DAG",
+            "pipeline",
+            "Starts a run of the chosen DAG, optionally with parameters, and can wait for it "
+            "to finish.",
+            ("success", "failed"),
+            RunDagConfig,
+            {"success": "succeeded", "failed": "failed"},
+            is_action=True,
+        ),
+        NodeType(
+            "pipeline.wait_for_dag",
+            "Wait for a DAG",
+            "pipeline",
+            "Waits until the chosen DAG has a recent successful run (e.g. an upstream pipeline).",
+            ("success", "timeout"),
+            WaitForDagConfig,
+            {"success": "it succeeded", "timeout": "gave up"},
+        ),
+        # ------------------------------------------------------------ databases
+        NodeType(
+            "database.run_sql",
+            "Run SQL",
+            "database",
+            "Runs SQL on the chosen database (e.g. refresh a table). Write statements are "
+            "policy-checked like any other action.",
+            ("success", "failed"),
+            RunSqlConfig,
+            is_action=True,
+        ),
+        NodeType(
+            "database.check",
+            "Check data",
+            "database",
+            "Runs a read-only query that returns one value and compares it, e.g. row count > 0. "
+            "Can keep checking until it passes.",
+            ("pass", "fail"),
+            CheckDataConfig,
+            {"pass": "passes", "fail": "fails"},
+        ),
+        # ------------------------------------------------------------ incident handling
         NodeType(
             "diagnose.classify_log",
             "Figure out why",
             "diagnosis",
             "Reads the failure log and labels the cause (network glitch, bad data, …).",
             ("next",),
-        ),
-        NodeType(
-            "check.dag_state",
-            "Check the DAG",
-            "logic",
-            "Asks Airflow whether the DAG is paused or already has an active run.",
-            ("ready", "paused", "busy"),
-            port_labels={"ready": "not paused, idle", "paused": "paused", "busy": "run active"},
+            needs_incident=True,
         ),
         NodeType(
             "approval.request",
@@ -172,21 +419,27 @@ NODE_TYPES: dict[str, NodeType] = {
             "Clears the failed tasks of the incident's latest failing run so Airflow reruns them.",
             ("success", "failed"),
             ClearTasksConfig,
+            needs_incident=True,
+            is_action=True,
         ),
         NodeType(
             "action.trigger_dag_run",
             "Start a new run",
             "action",
-            "Triggers a new DAG run.",
+            "Triggers a new run of the incident's DAG.",
             ("success", "failed"),
+            needs_incident=True,
+            is_action=True,
         ),
         NodeType(
             "action.set_dag_paused",
             "Pause / unpause DAG",
             "action",
-            "Pauses (or unpauses) the DAG in Airflow.",
+            "Pauses (or unpauses) the incident's DAG in Airflow.",
             ("success", "failed"),
             SetPausedConfig,
+            needs_incident=True,
+            is_action=True,
         ),
         NodeType(
             "verify.run_success",
@@ -203,12 +456,14 @@ NODE_TYPES: dict[str, NodeType] = {
             "Resolves, escalates, acknowledges, or adds a note to the incident.",
             ("next",),
             IncidentUpdateConfig,
+            needs_incident=True,
         ),
         NodeType(
             "notify",
             "Tell someone",
             "output",
-            "Sends an in-app notification or a webhook. Placeholders like {{incident.title}}.",
+            "Sends an in-app notification or a webhook. Placeholders like {{incident.title}} "
+            "or {{results.<block id>.value}}.",
             ("next",),
             NotifyConfig,
         ),
@@ -216,7 +471,8 @@ NODE_TYPES: dict[str, NodeType] = {
 }
 
 TRIGGER_TYPES = frozenset(t for t, nt in NODE_TYPES.items() if nt.category == "trigger")
-ACTION_TYPES = frozenset(t for t, nt in NODE_TYPES.items() if nt.category == "action")
+INCIDENT_TRIGGER_TYPES = frozenset(t for t in TRIGGER_TYPES if NODE_TYPES[t].needs_incident)
+ACTION_TYPES = frozenset(t for t, nt in NODE_TYPES.items() if nt.is_action)
 
 
 class GraphError(ValueError):
@@ -335,6 +591,18 @@ def validate_graph(raw: Any) -> Graph:
 
     graph = Graph(nodes=nodes, edges=edges, trigger_id=triggers[0])
     _check_acyclic_and_reachable(graph)
+    if graph.trigger.type not in INCIDENT_TRIGGER_TYPES:
+        needs = [
+            _problem(
+                f"'{NODE_TYPES[n.type].label}' works on an incident, so it needs an incident "
+                "trigger",
+                node=n.id,
+            )
+            for n in graph.nodes.values()
+            if NODE_TYPES[n.type].needs_incident
+        ]
+        if needs:
+            raise GraphError(needs)
     return graph
 
 

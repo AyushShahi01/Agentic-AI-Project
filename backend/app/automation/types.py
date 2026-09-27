@@ -49,3 +49,5 @@ class TriggerEvent(StrEnum):
     OPENED = "opened"
     RECURRED = "recurred"
     STALE = "stale"
+    MANUAL = "manual"  # "Run now"
+    SCHEDULE = "schedule"

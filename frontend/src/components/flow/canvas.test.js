@@ -9,7 +9,16 @@ import {
   monitorsOf,
   workflowFeeds,
 } from '../../pages/pipelines/pipelineModel'
-import { connect, connectionProblem, defaultConfig, fromFlow, nextNodeId, toFlow } from './graph'
+import {
+  connect,
+  connectionProblem,
+  defaultConfig,
+  fromFlow,
+  nextNodeId,
+  parseBlockPayload,
+  retypeNode,
+  toFlow,
+} from './graph'
 import { layeredLayout } from './layout'
 import { connectionState } from '../../connectionState'
 
@@ -181,4 +190,40 @@ test('connection state wording', () => {
   assert.equal(label({ last_health_status: 'UNKNOWN' }), 'Checking connection…')
   assert.equal(label({ last_health_status: 'UNAUTHORIZED' }), 'Authentication failed')
   assert.equal(label({ is_active: false, last_health_status: 'HEALTHY' }), 'Inactive')
+})
+
+test('retypeNode keeps the target, applies new defaults and drops edges from missing ports', () => {
+  const runDef = {
+    type: 'pipeline.run_dag',
+    ports: ['success', 'failed'],
+    config_schema: { properties: { connection_id: { default: '' }, dag_id: { default: '' }, timeout_minutes: { default: 60 } } },
+  }
+  const waitDef = {
+    type: 'pipeline.wait_for_dag',
+    ports: ['success', 'timeout'],
+    config_schema: {
+      properties: { connection_id: { default: '' }, dag_id: { default: '' }, success_within_minutes: { default: 60 } },
+    },
+  }
+  const node = {
+    id: 'orders_pipeline_1',
+    data: { nodeType: runDef.type, def: runDef, name: 'orders_pipeline', config: { connection_id: 'c1', dag_id: 'orders_pipeline', timeout_minutes: 5 } },
+  }
+  const edges = [
+    { id: 'a', source: 'orders_pipeline_1', sourceHandle: 'success', target: 'x' },
+    { id: 'b', source: 'orders_pipeline_1', sourceHandle: 'failed', target: 'y' },
+    { id: 'c', source: 'trigger', sourceHandle: 'next', target: 'orders_pipeline_1' },
+  ]
+  const out = retypeNode(node, waitDef, edges)
+  assert.equal(out.node.data.nodeType, 'pipeline.wait_for_dag')
+  assert.equal(out.node.data.name, 'orders_pipeline')
+  assert.deepEqual(out.node.data.config, { connection_id: 'c1', dag_id: 'orders_pipeline', success_within_minutes: 60 })
+  assert.deepEqual(out.edges.map((e) => e.id), ['a', 'c'])
+})
+
+test('parseBlockPayload accepts JSON presets and bare types', () => {
+  assert.deepEqual(parseBlockPayload('notify'), { type: 'notify' })
+  assert.deepEqual(parseBlockPayload('{"type":"pipeline.run_dag","name":"d"}'), { type: 'pipeline.run_dag', name: 'd' })
+  assert.equal(parseBlockPayload('{broken'), null)
+  assert.equal(parseBlockPayload(''), null)
 })

@@ -26,9 +26,21 @@ class AirflowConnectionHealth(BaseModel):
     last_checked_at: datetime | None
 
 
+class DatabaseConnectionHealth(BaseModel):
+    """A database registered in the connection catalog (not the platform's own database)."""
+
+    id: uuid.UUID
+    name: str
+    engine: str
+    status: ConnectionStatus
+    message: str | None
+    last_checked_at: datetime | None
+
+
 class HealthStatusResponse(BaseModel):
     status: Literal["ok", "degraded"]
     version: str
     environment: str
     database: DatabaseHealth
     airflow: list[AirflowConnectionHealth]
+    databases: list[DatabaseConnectionHealth] = []

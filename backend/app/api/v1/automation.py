@@ -24,6 +24,7 @@ from app.schemas.automation import (
     DecisionRequest,
     GraphCheck,
     GraphCheckResult,
+    ManualRunRequest,
     MarkedRead,
     NodeTypeRead,
     NotificationRead,
@@ -141,6 +142,21 @@ def list_runs(
         limit=page.limit,
         offset=page.offset,
     )
+
+
+@router.post("/workflows/{workflow_id}/run", response_model=WorkflowRunDetail, status_code=201)
+def run_workflow(
+    workflow_id: uuid.UUID,
+    db: DbSession,
+    operator: OperatorUser,
+    body: ManualRunRequest | None = None,
+) -> WorkflowRunDetail:
+    """Run now, for workflows started on demand or on a schedule."""
+    run = automation_service.start_manual_run(
+        db, workflow_id, actor=operator, dry_run=body.dry_run if body else None
+    )
+    db.expire_all()
+    return WorkflowRunDetail.model_validate(automation_service.get_run(db, run.id))
 
 
 @router.get("/runs/{run_id}", response_model=WorkflowRunDetail)

@@ -63,6 +63,8 @@ const STATUS_TONES = {
   TLS_ERROR: 'danger',
   INVALID_ENDPOINT: 'warning',
   AIRFLOW_ERROR: 'danger',
+  OK: 'success',
+  FAILED: 'danger',
   degraded: 'warning',
   error: 'danger',
 }
@@ -76,6 +78,8 @@ const STATUS_LABELS = {
   TLS_ERROR: 'TLS error',
   INVALID_ENDPOINT: 'Invalid endpoint',
   AIRFLOW_ERROR: 'Airflow error',
+  OK: 'Sent',
+  FAILED: 'Failed',
 }
 
 export function StatusPill({ status, label, title, tone }) {

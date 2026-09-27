@@ -37,10 +37,36 @@ export const airflowApi = {
   refreshConnection: (id) => api.post(`/airflow/connections/${id}/refresh`),
   syncDags: (id) => api.post(`/airflow/connections/${id}/sync-dags`),
   listDags: (id, query) => api.get(`/airflow/connections/${id}/dags`, query),
+  /** Every DAG of a connection (the API pages at most 200 at a time). */
+  async listAllDags(id, query = {}) {
+    const items = []
+    for (;;) {
+      const page = await api.get(`/airflow/connections/${id}/dags`, { ...query, limit: 200, offset: items.length })
+      items.push(...page.items)
+      if (!page.items.length || items.length >= page.total) return items
+    }
+  },
   setMonitored: (dagPk, isMonitored) =>
     api.patch(`/airflow/dags/${dagPk}`, { is_monitored: isMonitored }),
   setSla: (dagPk, slaMinutes) => api.patch(`/airflow/dags/${dagPk}`, { sla_minutes: slaMinutes }),
   updateDag: (dagPk, data) => api.patch(`/airflow/dags/${dagPk}`, data),
+}
+
+export const databaseApi = {
+  listConnections: () => api.get('/databases/connections', { limit: 200 }),
+  createConnection: (data) => api.post('/databases/connections', data),
+  updateConnection: (id, data) => api.patch(`/databases/connections/${id}`, data),
+  deleteConnection: (id) => api.delete(`/databases/connections/${id}`),
+  testUnsaved: (data) => api.post('/databases/test-connection', data),
+  testSaved: (id) => api.post(`/databases/connections/${id}/test`),
+}
+
+export const channelsApi = {
+  listConnections: () => api.get('/channels').then((items) => ({ items })),
+  createConnection: (data) => api.post('/channels', data),
+  updateConnection: (id, data) => api.patch(`/channels/${id}`, data),
+  deleteConnection: (id) => api.delete(`/channels/${id}`),
+  testSaved: (id, to = []) => api.post(`/channels/${id}/test`, { to }),
 }
 
 export const incidentsApi = {
@@ -65,6 +91,7 @@ export const automationApi = {
   listWorkflows: () => api.get('/automation/workflows'),
   getWorkflow: (id) => api.get(`/automation/workflows/${id}`),
   createWorkflow: (data) => api.post('/automation/workflows', data),
+  runWorkflow: (id, data = {}) => api.post(`/automation/workflows/${id}/run`, data),
   updateWorkflow: (id, data) => api.patch(`/automation/workflows/${id}`, data),
   deleteWorkflow: (id) => api.delete(`/automation/workflows/${id}`),
   validateGraph: (graph) => api.post('/automation/workflows/validate', { graph }),

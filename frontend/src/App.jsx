@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router'
+import { Navigate, Route, Routes, useSearchParams } from 'react-router'
 import { RedirectIfAuthenticated, RequireAuth, RequireRole } from './components/RouteGuards'
 import AppLayout from './layouts/AppLayout'
 import AuthLayout from './layouts/AuthLayout'
@@ -9,19 +9,24 @@ import Notifications from './pages/automation/Notifications'
 import RunDetail from './pages/automation/RunDetail'
 import RunList from './pages/automation/RunList'
 import Workflows from './pages/automation/Workflows'
+import Catalog from './pages/connections/Catalog'
 import Dashboard from './pages/dashboard/Dashboard'
 import IncidentDetail from './pages/incidents/IncidentDetail'
 import IncidentList from './pages/incidents/IncidentList'
-import Connections from './pages/settings/Connections'
-import MonitoredDags from './pages/settings/MonitoredDags'
 import Users from './pages/settings/Users'
 
-// Canvas pages pull in React Flow; load them only when opened.
+// The workflow editor pulls in React Flow; load it only when opened.
 const WorkflowEditor = lazy(() => import('./pages/automation/WorkflowEditor'))
-const PipelineCanvas = lazy(() => import('./pages/pipelines/PipelineCanvas'))
 
 function Lazy({ children }) {
   return <Suspense fallback={<p className="muted">Loading…</p>}>{children}</Suspense>
+}
+
+// Old DAG pages now live in the connection catalog; keep their links working.
+function ToCatalog() {
+  const [params] = useSearchParams()
+  const id = params.get('connection')
+  return <Navigate to={id ? `/connections?open=${id}` : '/connections'} replace />
 }
 
 export default function App() {
@@ -43,10 +48,11 @@ export default function App() {
           <Route path="/automation/runs/:id" element={<RunDetail />} />
           <Route path="/automation/workflows" element={<Workflows />} />
           <Route path="/automation/workflows/:id" element={<Lazy><WorkflowEditor /></Lazy>} />
-          <Route path="/pipelines" element={<Lazy><PipelineCanvas /></Lazy>} />
           <Route path="/automation/notifications" element={<Notifications />} />
-          <Route path="/settings/connections" element={<Connections />} />
-          <Route path="/settings/dags" element={<MonitoredDags />} />
+          <Route path="/connections" element={<Catalog />} />
+          <Route path="/settings/connections" element={<ToCatalog />} />
+          <Route path="/settings/dags" element={<ToCatalog />} />
+          <Route path="/pipelines" element={<ToCatalog />} />
           <Route element={<RequireRole roles={['ADMIN']} />}>
             <Route path="/settings/users" element={<Users />} />
           </Route>

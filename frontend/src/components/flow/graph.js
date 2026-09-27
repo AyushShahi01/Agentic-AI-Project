@@ -104,6 +104,33 @@ export function nextNodeId(type, nodes) {
   }
 }
 
+/**
+ * Change a block to another type (e.g. "Run this DAG" -> "Wait for it to succeed").
+ * Keeps config keys the new type also has (connection, DAG, SQL), uses defaults for the rest,
+ * and drops edges leaving output ports the new type does not have.
+ */
+export function retypeNode(node, newDef, edges) {
+  const defaults = defaultConfig(newDef.config_schema)
+  const keep = Object.fromEntries(Object.entries(node.data.config ?? {}).filter(([key]) => key in defaults))
+  const ports = new Set(newDef.ports ?? [])
+  return {
+    node: { ...node, data: { ...node.data, nodeType: newDef.type, def: newDef, config: { ...defaults, ...keep } } },
+    edges: edges.filter((e) => e.source !== node.id || ports.has(e.sourceHandle)),
+  }
+}
+
+/** Palette drag payload: JSON `{type, name?, config?, idBase?}` or a bare block type. */
+export function parseBlockPayload(raw) {
+  if (!raw) return null
+  if (!raw.startsWith('{')) return { type: raw }
+  try {
+    const payload = JSON.parse(raw)
+    return typeof payload?.type === 'string' ? payload : null
+  } catch {
+    return null
+  }
+}
+
 /** Default config values from a Pydantic JSON schema. */
 export function defaultConfig(schema) {
   const config = {}

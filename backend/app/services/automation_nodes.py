@@ -4,7 +4,9 @@ Each executor takes a NodeContext and the node, performs its work (policy-checke
 and returns a NodeResult naming the output port to follow, or a time to wait until.
 """
 
+import json
 import logging
+import operator
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,7 +22,10 @@ from app.automation import policy
 from app.automation.graph import ACTION_TYPES, Graph, Node
 from app.automation.render import render
 from app.automation.types import ApprovalStatus, NotificationLevel
+from app.connectors import database as db_connector
+from app.connectors.notify import Message
 from app.core.config import Settings
+from app.core.exceptions import AppError
 from app.detection.types import (
     IncidentResolution,
     IncidentSeverity,
@@ -28,7 +33,9 @@ from app.detection.types import (
 )
 from app.models.airflow import AirflowConnection, MonitoredDag
 from app.models.automation import Approval, Notification, WorkflowRun, WorkflowStep
+from app.models.database_connection import DatabaseConnection
 from app.models.incident import Incident
+from app.models.notification_channel import NotificationChannel
 from app.orchestration.airflow.base import (
     AirflowAdapter,
     AirflowAdapterError,
@@ -36,7 +43,13 @@ from app.orchestration.airflow.base import (
     ConnectionTestResult,
 )
 from app.orchestration.airflow.factory import run_async
-from app.services import airflow_service, audit_service, incident_service
+from app.services import (
+    airflow_service,
+    audit_service,
+    database_connection_service,
+    incident_service,
+    notification_channel_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,30 +71,71 @@ class NodeError(Exception):
     """The node could not run at all (fails the workflow run)."""
 
 
+class ActionFailed(Exception):
+    """An action ran but did not succeed (the node follows its 'failed' port)."""
+
+
 @dataclass
 class NodeContext:
     db: Session
     run: WorkflowRun
     graph: Graph
-    incident: Incident
+    incident: Incident | None  # None for manual and scheduled runs
     now: datetime
     settings: Settings
     _adapter: AirflowAdapter | None = None
+    _adapters: dict[uuid.UUID, AirflowAdapter] = field(default_factory=dict)
+
+    @property
+    def the_incident(self) -> Incident:
+        """The run's incident; incident-only blocks are rejected at validation otherwise."""
+        if self.incident is None:
+            raise NodeError("This block needs a workflow started by an incident")
+        return self.incident
 
     @property
     def connection(self) -> AirflowConnection:
-        conn = self.db.get(AirflowConnection, self.incident.connection_id)
+        conn = self.db.get(AirflowConnection, self.the_incident.connection_id)
         if conn is None:
             raise NodeError("The incident's Airflow connection no longer exists")
         return conn
 
     @property
     def dag(self) -> MonitoredDag | None:
+        if self.incident is None:
+            return None
         return self.db.get(MonitoredDag, self.incident.monitored_dag_id)
 
     @property
     def environment(self) -> str:
-        return str(self.connection.environment)
+        return str(self.connection.environment) if self.incident is not None else ""
+
+    # Blocks that name their own target (pipeline.* / database.*).
+    def airflow_connection(self, connection_id: str) -> AirflowConnection:
+        conn = self.db.get(AirflowConnection, _uuid(connection_id))
+        if conn is None:
+            raise NodeError("The block's Airflow connection no longer exists")
+        return conn
+
+    def airflow_adapter(self, conn: AirflowConnection) -> AirflowAdapter:
+        if self.incident is not None and conn.id == self.incident.connection_id:
+            return self.adapter()
+        if conn.id not in self._adapters:
+            try:
+                self._adapters[conn.id] = airflow_service.adapter_for(conn)
+            except AppError as exc:
+                raise NodeError(f"{conn.name}: {exc.message}") from exc
+        return self._adapters[conn.id]
+
+    def database_connection(self, connection_id: str) -> DatabaseConnection:
+        conn = self.db.get(DatabaseConnection, _uuid(connection_id))
+        if conn is None:
+            raise NodeError("The block's database connection no longer exists")
+        return conn
+
+    def record_result(self, node_id: str, result: dict[str, Any]) -> None:
+        """Expose a block's outcome to later blocks as {{results.<node id>.<key>}}."""
+        self.set_context("results", {**self.get_context("results", {}), node_id: result})
 
     @property
     def dry_run(self) -> bool:
@@ -106,6 +160,8 @@ class NodeContext:
         self.set_context("nodes", {**self.get_context("nodes", {}), node_id: state})
 
     def event(self, event: str, /, **details: Any) -> None:
+        if self.incident is None:
+            return  # manual/scheduled runs: the run's steps are the record
         incident_service.add_event(
             self.db,
             self.incident,
@@ -121,8 +177,11 @@ class NodeContext:
             entity_id=self.run.id,
             details={
                 "workflow": self.run.workflow_name,
-                "incident_id": str(self.incident.id),
-                "dag_id": self.incident.dag_id,
+                **(
+                    {"incident_id": str(self.incident.id), "dag_id": self.incident.dag_id}
+                    if self.incident is not None
+                    else {"trigger": self.run.trigger_event}
+                ),
                 "dry_run": self.dry_run,
                 **details,
             },
@@ -140,24 +199,46 @@ class NodeContext:
                 "status": str(incident.status),
                 "occurrence_count": incident.occurrence_count,
                 "run_id": incident.last_run_id or incident.run_id or "",
-            },
+            }
+            if incident is not None
+            else {},
             "diagnosis": self.get_context("diagnosis", {}),
-            "workflow": {"name": self.run.workflow_name},
+            "results": self.get_context("results", {}),
+            "workflow": {"name": self.run.workflow_name, "trigger": self.run.trigger_event},
             "environment": self.environment,
             "last_error": self.get_context("last_error", ""),
+            "links": {
+                "run": self.link(f"/automation/runs/{self.run.id}"),
+                "approvals": self.link("/automation/approvals"),
+            },
         }
+
+    def link(self, path: str) -> str:
+        """Absolute link into the app, for messages people open outside it."""
+        return self.settings.PUBLIC_APP_URL.rstrip("/") + path
+
+
+def _uuid(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------- triggers & logic
 
 
+_TRIGGER_TEXT = {"manual": "Started manually", "schedule": "Started by the schedule"}
+
+
 def _trigger(ctx: NodeContext, node: Node) -> NodeResult:
-    return NodeResult("next", message=f"Triggered by incident {ctx.run.trigger_event}")
+    event = ctx.run.trigger_event
+    return NodeResult("next", message=_TRIGGER_TEXT.get(event, f"Triggered by incident {event}"))
 
 
 def _filter(ctx: NodeContext, node: Node) -> NodeResult:
     cfg = node.config
-    incident = ctx.incident
+    incident = ctx.the_incident
     checks: list[str] = []
     failed: list[str] = []
 
@@ -200,7 +281,7 @@ def _filter(ctx: NodeContext, node: Node) -> NodeResult:
 
 
 def _classify(ctx: NodeContext, node: Node) -> NodeResult:
-    diagnosis = incident_service.diagnose(ctx.incident).as_dict()
+    diagnosis = incident_service.diagnose(ctx.the_incident).as_dict()
     ctx.set_context("diagnosis", diagnosis)
     ctx.event(
         "diagnosed",
@@ -213,7 +294,7 @@ def _classify(ctx: NodeContext, node: Node) -> NodeResult:
 
 
 def _dag_state(ctx: NodeContext, node: Node) -> NodeResult:
-    dag_id = ctx.incident.dag_id
+    dag_id = ctx.the_incident.dag_id
     try:
         dag = run_async(lambda: ctx.adapter().get_dag(dag_id))
         if dag is None:
@@ -246,14 +327,46 @@ _ACTION_TEXT = {
     "action.clear_failed_tasks": "retry the failed tasks of run {run_id}",
     "action.trigger_dag_run": "start a new run of {dag_id}",
     "action.set_dag_paused": "pause {dag_id}",
+    "pipeline.run_dag": "run {dag_id}",
+    "database.run_sql": "run SQL on {database}",
 }
 
 
-def describe_action(action: dict[str, Any], incident: Incident) -> str:
+def describe_action(
+    action: dict[str, Any], incident: Incident | None, *, database: str = "the database"
+) -> str:
     template = _ACTION_TEXT.get(action.get("type", ""), "continue the workflow")
-    if action.get("type") == "action.set_dag_paused" and not action["config"].get("paused", True):
+    config = action.get("config") or {}
+    if action.get("type") == "action.set_dag_paused" and not config.get("paused", True):
         template = "unpause {dag_id}"
-    return template.format(run_id=incident.last_run_id or incident.run_id, dag_id=incident.dag_id)
+    if action.get("type") == "database.run_sql" and config.get("read_only"):
+        template = "run a read-only query on {database}"
+    return template.format(
+        run_id=(incident.last_run_id or incident.run_id) if incident else "",
+        dag_id=config.get("dag_id") or (incident.dag_id if incident else ""),
+        database=database,
+    )
+
+
+def _action_environment(ctx: NodeContext, action: dict[str, Any]) -> tuple[str, str]:
+    """(environment, database name) of the connection the proposed action would touch.
+
+    Blocks with their own target use its connection; incident blocks use the incident's.
+    Without either, assume PROD so an approval is never skipped by accident.
+    """
+    config = action.get("config") or {}
+    kind = str(action.get("type", "")).split(".")[0]
+    if kind == "pipeline" and config.get("connection_id"):
+        conn = ctx.db.get(AirflowConnection, _uuid(config["connection_id"]))
+        if conn is not None:
+            return str(conn.environment), ""
+    if kind == "database" and config.get("connection_id"):
+        db_conn = ctx.db.get(DatabaseConnection, _uuid(config["connection_id"]))
+        if db_conn is not None:
+            return str(db_conn.environment), db_conn.name
+    if ctx.incident is not None:
+        return ctx.environment, ""
+    return "PROD", ""
 
 
 def _approval(ctx: NodeContext, node: Node) -> NodeResult:
@@ -262,31 +375,33 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
 
     if approval_id is None:
         required_envs = node.config["required_environments"]
+        action = _proposed_action(ctx, node)
+        environment, database = _action_environment(ctx, action)
         if ctx.dry_run:
             return NodeResult("approved", {"auto": "dry_run"}, "Dry run: approval skipped")
-        if required_envs and ctx.environment not in required_envs:
+        if required_envs and environment not in required_envs:
             return NodeResult(
                 "approved",
-                {"auto": "not_required", "environment": ctx.environment},
-                f"No approval needed in {ctx.environment}",
+                {"auto": "not_required", "environment": environment},
+                f"No approval needed in {environment}",
             )
-        action = _proposed_action(ctx, node)
-        what = describe_action(action, ctx.incident)
+        what = describe_action(action, ctx.incident, database=database or "the database")
         diagnosis = ctx.get_context("diagnosis", {})
-        summary = f"The workflow wants to {what} on {ctx.environment}."
+        summary = f"The workflow wants to {what} on {environment}."
         if diagnosis:
             summary += f" Diagnosis: {diagnosis.get('label')}."
             if diagnosis.get("matched_line"):
                 summary += f" Evidence: {diagnosis['matched_line']}"
         expires = ctx.now + timedelta(minutes=node.config["timeout_minutes"])
+        subject = ctx.incident.dag_id if ctx.incident is not None else ctx.run.workflow_name
         approval = Approval(
             id=uuid.uuid4(),
             run_id=ctx.run.id,
-            incident_id=ctx.incident.id,
+            incident_id=ctx.incident.id if ctx.incident is not None else None,
             node_id=node.id,
-            title=f"{ctx.incident.dag_id}: {what}"[:300],
+            title=f"{subject}: {what}"[:300],
             summary=summary,
-            proposed_action={**action, "description": what, "environment": ctx.environment},
+            proposed_action={**action, "description": what, "environment": environment},
             status=ApprovalStatus.PENDING,
             expires_at=expires,
         )
@@ -294,7 +409,7 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
         ctx.db.add(
             Notification(
                 run_id=ctx.run.id,
-                incident_id=ctx.incident.id,
+                incident_id=ctx.incident.id if ctx.incident is not None else None,
                 level=NotificationLevel.WARNING,
                 title=f"Approval needed: {approval.title}"[:300],
                 body=summary,
@@ -304,11 +419,24 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
         ctx.set_node_state(node.id, {"approval_id": str(approval.id)})
         ctx.event("approval_requested", approval_id=str(approval.id), action=what)
         ctx.audit("approval.requested", approval_id=str(approval.id), action=what)
-        return NodeResult(
-            output={"approval_id": str(approval.id), "expires_at": expires.isoformat()},
-            message=f"Waiting for approval to {what}",
-            wait_until=expires,
-        )
+        output = {"approval_id": str(approval.id), "expires_at": expires.isoformat()}
+        message = f"Waiting for approval to {what}"
+        if node.config.get("send_via"):
+            ok, detail = _send_via(
+                ctx,
+                node.config["send_via"],
+                node.config.get("to") or [],
+                Message(
+                    title=f"Approval needed: {approval.title}",
+                    text=f"{summary}\nExpires {expires:%Y-%m-%d %H:%M} UTC.",
+                    level="WARNING",
+                    link=ctx.link("/automation/approvals"),
+                    link_label="Review and approve",
+                ),
+            )
+            output.update(sent=ok, detail=detail)
+            message += f" ({detail})"
+        return NodeResult(output=output, message=message, wait_until=expires)
 
     approval = ctx.db.get(Approval, uuid.UUID(approval_id))
     if approval is None:
@@ -341,6 +469,8 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
 
 
 def _actions_last_24h(ctx: NodeContext) -> int:
+    """Successful automated actions on the incident's DAG in the last 24h (rate limit)."""
+    incident = ctx.the_incident
     since = ctx.now - timedelta(hours=24)
     return (
         ctx.db.scalar(
@@ -348,8 +478,8 @@ def _actions_last_24h(ctx: NodeContext) -> int:
             .join(WorkflowRun, WorkflowRun.id == WorkflowStep.run_id)
             .join(Incident, Incident.id == WorkflowRun.incident_id)
             .where(
-                Incident.connection_id == ctx.incident.connection_id,
-                Incident.dag_id == ctx.incident.dag_id,
+                Incident.connection_id == incident.connection_id,
+                Incident.dag_id == incident.dag_id,
                 WorkflowStep.node_type.in_(ACTION_TYPES),
                 WorkflowStep.port == "success",
                 WorkflowStep.finished_at >= since,
@@ -366,13 +496,17 @@ def _run_action(
     description: str,
     execute: Callable[[], dict[str, Any]],
     simulated_target: dict[str, Any] | None = None,
+    *,
+    environment: str | None = None,
 ) -> NodeResult:
+    """Policy-check and run an action. `environment` is given for blocks with their own target;
+    those are not rate limited (their workflow's trigger sets the pace), incident fixes are."""
     decision = policy.check_action(
         node.type,
-        environment=ctx.environment,
+        environment=environment if environment is not None else ctx.environment,
         dry_run=ctx.dry_run,
         approved=bool(ctx.get_context("approval_granted")),
-        actions_last_24h=_actions_last_24h(ctx),
+        actions_last_24h=_actions_last_24h(ctx) if environment is None else 0,
         max_per_day=ctx.settings.AUTOMATION_MAX_ACTIONS_PER_DAG_PER_DAY,
     )
     if not decision.allowed:
@@ -393,12 +527,12 @@ def _run_action(
 
     try:
         output = execute()
-    except AirflowAdapterError as exc:
-        message = exc.result.message
+    except (AirflowAdapterError, ActionFailed) as exc:
+        message = exc.result.message if isinstance(exc, AirflowAdapterError) else str(exc)
         ctx.set_context("last_error", f"Could not {description}: {message}")
         ctx.event("action_failed", action=description, error=message)
         ctx.audit("automation.action_failed", action=node.type, error=message)
-        return NodeResult("failed", {"error": message}, f"Airflow error: {message}")
+        return NodeResult("failed", {"error": message}, f"Could not {description}: {message}")
 
     ctx.event("action_executed", action=description, **output)
     ctx.audit("automation.action_executed", action=node.type, **output)
@@ -406,7 +540,7 @@ def _run_action(
 
 
 def _clear_failed_tasks(ctx: NodeContext, node: Node) -> NodeResult:
-    incident = ctx.incident
+    incident = ctx.the_incident
     run_id = incident.last_run_id or incident.run_id
     if not run_id:
         ctx.set_context("last_error", "There is no failed run to retry.")
@@ -438,10 +572,11 @@ def _clear_failed_tasks(ctx: NodeContext, node: Node) -> NodeResult:
 
 
 def _trigger_dag_run(ctx: NodeContext, node: Node) -> NodeResult:
-    dag_id = ctx.incident.dag_id
+    incident = ctx.the_incident
+    dag_id = incident.dag_id
 
     def execute() -> dict[str, Any]:
-        note = f"Triggered by automation '{ctx.run.workflow_name}' for incident {ctx.incident.id}"
+        note = f"Triggered by automation '{ctx.run.workflow_name}' for incident {incident.id}"
         run = run_async(lambda: ctx.adapter().trigger_dag_run(dag_id, note=note))
         ctx.set_context(
             "action_target", {"dag_id": dag_id, "run_id": run.run_id, "action": "trigger"}
@@ -452,7 +587,7 @@ def _trigger_dag_run(ctx: NodeContext, node: Node) -> NodeResult:
 
 
 def _set_dag_paused(ctx: NodeContext, node: Node) -> NodeResult:
-    dag_id = ctx.incident.dag_id
+    dag_id = ctx.the_incident.dag_id
     paused = node.config["paused"]
 
     def execute() -> dict[str, Any]:
@@ -483,17 +618,37 @@ def _verify(ctx: NodeContext, node: Node) -> NodeResult:
         ctx.set_context("last_error", "Nothing to verify: the previous action started no run.")
         return NodeResult("failed", message="Nothing to verify")
 
+    deadline = _deadline(ctx, node, node.config["timeout_minutes"])
+    dag_id = target["dag_id"]
+    if target.get("connection_id"):
+        adapter = ctx.airflow_adapter(ctx.airflow_connection(target["connection_id"]))
+    else:
+        adapter = ctx.adapter()
+    return _poll_dag_run(ctx, adapter, dag_id, run_id, deadline, after="the fix")
+
+
+def _deadline(ctx: NodeContext, node: Node, minutes: int) -> datetime:
+    """The node's deadline, fixed on its first execution and kept across waits."""
     state = ctx.node_state(node.id)
     if "deadline" not in state:
-        deadline = ctx.now + timedelta(minutes=node.config["timeout_minutes"])
-        state = {"deadline": deadline.isoformat(), "checks": 0}
-    deadline = datetime.fromisoformat(state["deadline"])
+        state["deadline"] = (ctx.now + timedelta(minutes=minutes)).isoformat()
     state["checks"] = int(state.get("checks", 0)) + 1
     ctx.set_node_state(node.id, state)
+    return datetime.fromisoformat(state["deadline"])
 
-    dag_id = target["dag_id"]
+
+def _poll_dag_run(
+    ctx: NodeContext,
+    adapter: AirflowAdapter,
+    dag_id: str,
+    run_id: str,
+    deadline: datetime,
+    *,
+    after: str,
+) -> NodeResult:
+    """Wait for a DAG run to finish: 'success', 'failed' (incl. timeout), or wait again."""
     try:
-        run = run_async(lambda: ctx.adapter().get_dag_run(dag_id, run_id))
+        run = run_async(lambda: adapter.get_dag_run(dag_id, run_id))
     except AirflowAdapterError as exc:
         if ctx.now >= deadline:
             ctx.set_context("last_error", f"Could not check run {run_id}: {exc.result.message}")
@@ -509,7 +664,7 @@ def _verify(ctx: NodeContext, node: Node) -> NodeResult:
         ctx.event("verified", run=run_id, state=run.state)
         return NodeResult("success", {"run_id": run_id, "state": run.state}, "Run succeeded")
     if run.state == "failed":
-        ctx.set_context("last_error", f"Run {run_id} failed again after the fix.")
+        ctx.set_context("last_error", f"Run {run_id} of {dag_id} failed after {after}.")
         ctx.event("verification_failed", run=run_id, state=run.state)
         return NodeResult("failed", {"run_id": run_id, "state": run.state}, "Run failed again")
     if ctx.now >= deadline:
@@ -574,19 +729,40 @@ def _host_allowed(url: str, allowed: list[str]) -> bool:
     return not allowed or host in {h.lower() for h in allowed}
 
 
+def _send_via(
+    ctx: NodeContext, channel_id: str, recipients: list[str], message: Message
+) -> tuple[bool, str]:
+    """Send through a catalog channel. Delivery problems never fail the run: they are
+    reported in the step and on the channel's status instead."""
+    channel = ctx.db.get(NotificationChannel, _uuid(channel_id))
+    if channel is None:
+        ctx.event("notify_failed", error="channel no longer exists")
+        return False, "The notification channel no longer exists"
+    if ctx.dry_run:
+        return True, f"Dry run: would send via {channel.name}"
+    result = notification_channel_service.deliver(channel, message, recipients or None)
+    if result.ok:
+        ctx.event("notified", channel=channel.name, detail=result.detail)
+        return True, f"Sent via {channel.name}: {result.detail}"
+    ctx.event("notify_failed", channel=channel.name, error=result.detail)
+    ctx.audit("automation.notify_failed", channel=channel.name, error=result.detail)
+    return False, f"Could not send via {channel.name}: {result.detail}"
+
+
 def _notify(ctx: NodeContext, node: Node) -> NodeResult:
     cfg = node.config
     values = ctx.render_values()
-    title = render(cfg["title"], values).strip()[:300] or ctx.incident.title
+    fallback = ctx.incident.title if ctx.incident is not None else ctx.run.workflow_name
+    title = render(cfg["title"], values).strip()[:300] or fallback
     body = render(cfg["message"], values).strip()
     level = NotificationLevel(cfg["level"])
 
-    if cfg["channel"] == "in_app":
+    if cfg["channel"] == "in_app" or cfg.get("send_via"):
         prefix = "[Dry run] " if ctx.dry_run else ""
         ctx.db.add(
             Notification(
                 run_id=ctx.run.id,
-                incident_id=ctx.incident.id,
+                incident_id=ctx.incident.id if ctx.incident is not None else None,
                 level=level,
                 title=(prefix + title)[:300],
                 body=body,
@@ -594,7 +770,21 @@ def _notify(ctx: NodeContext, node: Node) -> NodeResult:
             )
         )
         ctx.event("notified", channel="in_app", title=title)
-        return NodeResult("next", {"channel": "in_app", "title": title}, "In-app notification")
+        if not cfg.get("send_via"):
+            return NodeResult("next", {"channel": "in_app", "title": title}, "In-app notification")
+        ok, detail = _send_via(
+            ctx,
+            cfg["send_via"],
+            cfg.get("to") or [],
+            Message(
+                title=title,
+                text=body,
+                level=str(level),
+                link=values["links"]["run"],
+                link_label="Open the run",
+            ),
+        )
+        return NodeResult("next", {"title": title, "sent": ok, "detail": detail}, detail)
 
     url = cfg["url"] or ""
     if ctx.dry_run:
@@ -631,9 +821,252 @@ def _notify(ctx: NodeContext, node: Node) -> NodeResult:
     return NodeResult("next", {"channel": "webhook", "error": error}, f"Webhook failed: {error}")
 
 
+# ---------------------------------------------------------------------- orchestration
+
+
+def _wait(ctx: NodeContext, node: Node) -> NodeResult:
+    minutes = node.config["minutes"]
+    state = ctx.node_state(node.id)
+    if "until" not in state:
+        state["until"] = (ctx.now + timedelta(minutes=minutes)).isoformat()
+        ctx.set_node_state(node.id, state)
+    until = datetime.fromisoformat(state["until"])
+    if ctx.now >= until:
+        return NodeResult("next", message=f"Waited {minutes} min")
+    return NodeResult(message=f"Waiting until {until:%H:%M} UTC", wait_until=until)
+
+
+def _run_dag(ctx: NodeContext, node: Node) -> NodeResult:
+    cfg = node.config
+    conn = ctx.airflow_connection(cfg["connection_id"])
+    dag_id = cfg["dag_id"]
+    state = ctx.node_state(node.id)
+
+    if "run_id" in state:  # woken up: the run was started earlier, check on it
+        run_id = state["run_id"]
+        deadline = datetime.fromisoformat(state["deadline"])
+        result = _poll_dag_run(
+            ctx, ctx.airflow_adapter(conn), dag_id, run_id, deadline, after="it started"
+        )
+        if result.port:
+            ctx.record_result(
+                node.id,
+                {"dag_id": dag_id, "run_id": run_id, "state": result.output.get("state", "")},
+            )
+        return result
+
+    target = {"connection_id": str(conn.id), "dag_id": dag_id, "action": "trigger"}
+
+    def execute() -> dict[str, Any]:
+        conf = json.loads(cfg["parameters"] or "{}")
+        note = f"Started by workflow '{ctx.run.workflow_name}'"
+        run = run_async(
+            lambda: ctx.airflow_adapter(conn).trigger_dag_run(dag_id, note=note, conf=conf)
+        )
+        ctx.set_context("action_target", {**target, "run_id": run.run_id})
+        return {"dag_id": dag_id, "run_id": run.run_id}
+
+    result = _run_action(
+        ctx, node, f"run {dag_id}", execute, target, environment=str(conn.environment)
+    )
+    run_id = result.output.get("run_id", "")
+    simulated = bool(result.output.get("simulated"))
+    if result.port != "success" or simulated or not cfg["wait_for_completion"]:
+        started = "simulated" if simulated else "queued"
+        ctx.record_result(
+            node.id,
+            {
+                "dag_id": dag_id,
+                "run_id": run_id,
+                "state": started if result.port == "success" else "failed",
+            },
+        )
+        return result
+
+    deadline = ctx.now + timedelta(minutes=cfg["timeout_minutes"])
+    ctx.set_node_state(node.id, {"run_id": run_id, "deadline": deadline.isoformat()})
+    poll = timedelta(seconds=ctx.settings.AUTOMATION_VERIFY_POLL_SECONDS)
+    return NodeResult(
+        output=result.output,
+        message=f"Started {run_id}; waiting for it to finish",
+        wait_until=min(ctx.now + poll, deadline),
+    )
+
+
+def _wait_for_dag(ctx: NodeContext, node: Node) -> NodeResult:
+    cfg = node.config
+    conn = ctx.airflow_connection(cfg["connection_id"])
+    dag_id = cfg["dag_id"]
+    window = timedelta(minutes=cfg["success_within_minutes"])
+    deadline = _deadline(ctx, node, cfg["timeout_minutes"])
+
+    def give_up(reason: str, output: dict[str, Any]) -> NodeResult:
+        ctx.set_context("last_error", reason)
+        ctx.record_result(node.id, {"dag_id": dag_id, "succeeded": False})
+        return NodeResult("timeout", output, reason)
+
+    try:
+        # Look back a day further than the window: a long run may have started before it.
+        runs = run_async(
+            lambda: ctx.airflow_adapter(conn).list_dag_runs(
+                dag_id, since=ctx.now - window - timedelta(days=1)
+            )
+        )
+    except AirflowAdapterError as exc:
+        if ctx.now >= deadline:
+            return give_up(f"Could not read runs of {dag_id}: {exc.result.message}", {})
+        return _verify_wait(ctx, deadline, f"Airflow unavailable, retrying: {exc.result.message}")
+
+    def finished(run: Any) -> datetime | None:
+        return run.end_date or run.sort_date
+
+    recent = [
+        r
+        for r in runs
+        if r.state == "success" and finished(r) is not None and finished(r) >= ctx.now - window
+    ]
+    if recent:
+        latest = max(recent, key=lambda r: finished(r))
+        output = {"run_id": latest.run_id, "finished_at": finished(latest).isoformat()}
+        ctx.record_result(node.id, {"dag_id": dag_id, "succeeded": True, **output})
+        return NodeResult("success", output, f"{dag_id} succeeded ({latest.run_id})")
+    if ctx.now >= deadline:
+        minutes = cfg["success_within_minutes"]
+        return give_up(f"{dag_id} had no successful run within {minutes} min.", {})
+    return _verify_wait(ctx, deadline, f"No recent successful run of {dag_id} yet")
+
+
+def _sql_summary(result: db_connector.SqlResult) -> dict[str, Any]:
+    if not result.returns_rows:
+        return {"rows_affected": result.row_count, "value": result.row_count}
+    return {
+        "columns": result.columns,
+        "rows": result.rows,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "value": result.rows[0][0] if result.rows and result.rows[0] else None,
+    }
+
+
+def _sql_message(summary: dict[str, Any]) -> str:
+    if "rows_affected" in summary:
+        return f"{summary['rows_affected']} row(s) affected"
+    more = "+" if summary.get("truncated") else ""
+    return f"Returned {summary['row_count'] - (1 if more else 0)}{more} row(s)"
+
+
+def _query(
+    conn: DatabaseConnection, sql: str, *, read_only: bool, timeout_seconds: int, max_rows: int
+) -> db_connector.SqlResult:
+    """Run SQL on a catalog connection; any problem becomes ActionFailed."""
+    if not conn.is_active:
+        raise ActionFailed(f"Database connection {conn.name} is turned off")
+    try:
+        target = database_connection_service.target_for(conn)
+        return db_connector.execute(
+            target, sql, read_only=read_only, timeout_seconds=timeout_seconds, max_rows=max_rows
+        )
+    except AppError as exc:
+        raise ActionFailed(exc.message) from exc
+    except db_connector.SqlError as exc:
+        raise ActionFailed(str(exc)) from exc
+
+
+def _run_sql(ctx: NodeContext, node: Node) -> NodeResult:
+    cfg = node.config
+    conn = ctx.database_connection(cfg["connection_id"])
+    description = f"run SQL on {conn.name}"
+
+    def execute() -> dict[str, Any]:
+        result = _query(
+            conn,
+            cfg["sql"],
+            read_only=cfg["read_only"],
+            timeout_seconds=cfg["timeout_seconds"],
+            max_rows=20,
+        )
+        summary = _sql_summary(result)
+        ctx.record_result(node.id, summary)
+        return summary
+
+    if cfg["read_only"]:
+        # A read-only transaction cannot change anything: no policy check, runs in dry runs too.
+        try:
+            output = execute()
+        except ActionFailed as exc:
+            ctx.set_context("last_error", f"Could not {description}: {exc}")
+            return NodeResult("failed", {"error": str(exc)}, f"Query failed: {exc}")
+        return NodeResult("success", output, _sql_message(output))
+
+    result = _run_action(
+        ctx, node, description, execute, {"database": conn.name}, environment=str(conn.environment)
+    )
+    if result.port == "success" and not result.output.get("simulated"):
+        result.message = _sql_message(result.output)
+    return result
+
+
+_COMPARE = {
+    ">": operator.gt,
+    ">=": operator.ge,
+    "=": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+}
+
+
+def compare(value: Any, op: str, expected: str) -> bool:
+    """Numbers compare numerically; anything else only supports = and != (as text)."""
+    if value is None:
+        return False
+    try:
+        return _COMPARE[op](float(value), float(expected))
+    except (TypeError, ValueError):
+        if op in ("=", "!="):
+            return (str(value) == expected) == (op == "=")
+        return False
+
+
+def _check_data(ctx: NodeContext, node: Node) -> NodeResult:
+    cfg = node.config
+    conn = ctx.database_connection(cfg["connection_id"])
+    op, expected, keep_checking = cfg["operator"], cfg["expected"], cfg["keep_checking_minutes"]
+    deadline = _deadline(ctx, node, keep_checking) if keep_checking else ctx.now
+
+    try:
+        result = _query(conn, cfg["sql"], read_only=True, timeout_seconds=60, max_rows=1)
+    except ActionFailed as exc:
+        if ctx.now < deadline:
+            return _verify_wait(ctx, deadline, f"Query failed, retrying: {exc}")
+        ctx.set_context("last_error", f"Data check on {conn.name} could not run: {exc}")
+        ctx.record_result(node.id, {"value": None, "passed": False, "error": str(exc)})
+        return NodeResult("fail", {"error": str(exc)}, f"Query failed: {exc}")
+
+    if not result.returns_rows:
+        raise NodeError("The data check query must return a value (use SELECT)")
+    value = result.rows[0][0] if result.rows and result.rows[0] else None
+    passed = compare(value, op, expected)
+    output = {"value": value, "passed": passed, "rule": f"{op} {expected}"}
+    ctx.record_result(node.id, output)
+    if passed:
+        return NodeResult("pass", output, f"Passed: {value} {op} {expected}")
+    if ctx.now < deadline:
+        return _verify_wait(ctx, deadline, f"Not yet: {value} is not {op} {expected}")
+    ctx.set_context("last_error", f"Data check failed: got {value}, expected {op} {expected}.")
+    return NodeResult("fail", output, f"Failed: {value} is not {op} {expected}")
+
+
 EXECUTORS: dict[str, Callable[[NodeContext, Node], NodeResult]] = {
     "trigger.incident": _trigger,
     "trigger.incident_stale": _trigger,
+    "trigger.manual": _trigger,
+    "trigger.schedule": _trigger,
+    "flow.wait": _wait,
+    "pipeline.run_dag": _run_dag,
+    "pipeline.wait_for_dag": _wait_for_dag,
+    "database.run_sql": _run_sql,
+    "database.check": _check_data,
     "condition.filter": _filter,
     "diagnose.classify_log": _classify,
     "check.dag_state": _dag_state,

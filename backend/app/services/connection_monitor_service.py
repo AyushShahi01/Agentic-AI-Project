@@ -1,5 +1,8 @@
 """Connection monitor: keeps each active connection's health and DAG list current.
 
+Database connections from the catalog are health-checked in the same cycle (see
+`database_connection_service.check_all`).
+
 Every cycle lists DAGs live from every active connection (concurrently, so one slow or dead
 Airflow does not delay the others), then records the outcome: success refreshes
 `monitored_dags` and marks the connection HEALTHY; failure stores the failure status. The UI
@@ -30,7 +33,7 @@ from app.orchestration.airflow.base import (
     ConnectionTestResult,
 )
 from app.orchestration.airflow.factory import run_async
-from app.services import airflow_service, audit_service
+from app.services import airflow_service, audit_service, database_connection_service
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,8 @@ class CycleSummary:
     connections: int = 0
     healthy: int = 0
     failing: int = 0
+    databases_healthy: int = 0
+    databases_failing: int = 0
     transitions: list[dict[str, str]] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
 
@@ -182,4 +187,15 @@ def run_cycle(db: Session, *, trigger: str = "schedule", actor: User | None = No
             summary.healthy += 1
         else:
             summary.failing += 1
+
+    try:
+        databases = database_connection_service.check_all(db, actor=actor)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.warning("Could not record database connection status: %s", exc)
+        summary.errors.append({"connection": "databases", "error": str(exc)[:500]})
+    else:
+        summary.databases_healthy = databases.healthy
+        summary.databases_failing = databases.failing
+        summary.transitions.extend(databases.transitions)
     return summary

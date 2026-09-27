@@ -23,6 +23,7 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from app.orchestration.airflow.base import (
@@ -396,7 +397,9 @@ class MockAirflowAdapter:
             self._writes.cleared[(dag_id, run_id)] = clock()
         return cleared
 
-    async def trigger_dag_run(self, dag_id: str, *, note: str | None = None) -> AirflowDagRun:
+    async def trigger_dag_run(
+        self, dag_id: str, *, note: str | None = None, conf: dict[str, Any] | None = None
+    ) -> AirflowDagRun:
         self._raise_if_simulating()
         when = clock()
         self._writes.triggered.setdefault(dag_id, []).append(when)

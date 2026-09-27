@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router'
 import { Card, StatusPill } from '../../components/ui'
-import { connectionState } from '../../connectionState'
+import { connectionState, databaseState } from '../../connectionState'
 import { formatRelative } from '../../format'
 import { useAuth } from '../../context/AuthContext'
-import { airflowApi, detectionApi } from '../../services/endpoints'
+import { airflowApi, databaseApi, detectionApi } from '../../services/endpoints'
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 const SEVERITY_PILL = { CRITICAL: 'error', HIGH: 'error', MEDIUM: 'degraded', LOW: 'UNKNOWN' }
@@ -22,6 +22,7 @@ export default function Dashboard() {
   const { health, incidentSummary, automationSummary } = useOutletContext()
   const { user } = useAuth()
   const [connections, setConnections] = useState(null)
+  const [databases, setDatabases] = useState(null)
   const [dagStats, setDagStats] = useState(null)
   const [error, setError] = useState(null)
   const [detection, setDetection] = useState(null)
@@ -34,6 +35,10 @@ export default function Dashboard() {
           .status()
           .then((d) => !cancelled && setDetection(d))
           .catch(() => {})
+        databaseApi
+          .listConnections()
+          .then(({ items }) => !cancelled && setDatabases(items))
+          .catch(() => !cancelled && setDatabases([]))
         const { items } = await airflowApi.listConnections()
         // DAG counts only from connections Airflow is answering for; others would be stale.
         const stats = await Promise.all(
@@ -76,7 +81,7 @@ export default function Dashboard() {
       {error && <p className="field-error">{error}</p>}
 
       <div className="stat-grid">
-        <Card title="Database">
+        <Card title="Platform database">
           {health ? (
             <>
               <StatusPill status={health.database.status} label={health.database.status === 'ok' ? 'Connected' : 'Error'} />
@@ -88,36 +93,28 @@ export default function Dashboard() {
             <p className="muted">Checking…</p>
           )}
         </Card>
-        <Card title="Airflow connections">
-          <div className="stat-value">{connections?.length ?? '—'}</div>
+        <Card title="Connections" actions={<Link to="/connections" className="small">Catalog</Link>}>
+          <div className="stat-value">{connections && databases ? connections.length + databases.length : '—'}</div>
+          <p className="muted small">
+            {connections?.length ?? 0} Airflow · {databases?.length ?? 0} database
+            {databases?.length === 1 ? '' : 's'}
+            {dagStats?.live ? ` · ${dagStats.monitored} of ${dagStats.synced} DAGs monitored` : ''}
+          </p>
           <div className="pill-row">
-            {connections
-              ?.filter((c) => c.is_active)
-              .map((c) => {
-                const state = connectionState(c)
-                return (
-                  <StatusPill
-                    key={c.id}
-                    tone={state.tone}
-                    label={`${c.name}: ${state.label}`}
-                    title={state.message ?? state.hint}
-                  />
-                )
-              })}
+            {[
+              ...(connections ?? []).map((c) => [c, connectionState(c)]),
+              ...(databases ?? []).map((c) => [c, databaseState(c)]),
+            ]
+              .filter(([c]) => c.is_active)
+              .map(([c, state]) => (
+                <StatusPill
+                  key={c.id}
+                  tone={state.tone}
+                  label={`${c.name}: ${state.label}`}
+                  title={state.message ?? state.hint}
+                />
+              ))}
           </div>
-        </Card>
-        <Card title="DAGs">
-          {dagStats?.live ? (
-            <>
-              <div className="stat-value">{dagStats.monitored}</div>
-              <p className="muted small">monitored of {dagStats.synced} in Airflow</p>
-            </>
-          ) : (
-            <>
-              <div className="stat-value">—</div>
-              <p className="muted small">{dagStats ? 'Airflow not connected' : 'Checking…'}</p>
-            </>
-          )}
         </Card>
         <Card title="Open incidents" actions={<Link to="/incidents" className="small">View all</Link>}>
           <div className="stat-value">{incidentSummary?.open_total ?? '—'}</div>
@@ -169,13 +166,13 @@ export default function Dashboard() {
       <Card title="Getting started">
         <ol className="steps">
           <Step done={Boolean(connections?.length)}>
-            <Link to="/settings/connections">Register an Airflow connection</Link>
+            <Link to="/connections">Add an Airflow connection</Link> to the catalog
           </Step>
           <Step done={tested}>Test the connection until it reports Healthy</Step>
           <Step done={Boolean(dagStats?.synced > 0)}>
-            <Link to="/settings/dags">Sync DAGs</Link> from Airflow
+            <Link to="/connections">Sync DAGs</Link> from Airflow
           </Step>
-          <Step done={Boolean(dagStats?.monitored > 0)}>Mark the DAGs you want monitored</Step>
+          <Step done={Boolean(dagStats?.monitored > 0)}>Open the connection and turn on monitoring for the DAGs you care about</Step>
           <Step done={Boolean(detection?.last_cycle)}>
             Detection has run (automatically, or via <Link to="/incidents">Run detection now</Link>)
           </Step>
