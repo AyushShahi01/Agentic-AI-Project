@@ -22,6 +22,20 @@ export const NODE_LABELS = {
   notify: 'Tell someone',
 }
 
+// The canvas groups the backend's block categories into four stages, one colour each.
+export const STAGES = [
+  { id: 'start', label: 'Start', title: 'Start when…', categories: ['trigger'] },
+  { id: 'do', label: 'Do', title: 'Do something', categories: ['pipeline', 'database', 'action'] },
+  { id: 'decide', label: 'Decide', title: 'Decide & check', categories: ['logic', 'approval', 'verify', 'diagnosis'] },
+  { id: 'tell', label: 'Tell', title: 'Record & tell', categories: ['output'] },
+]
+
+const STAGE_BY_CATEGORY = Object.fromEntries(STAGES.flatMap((s) => s.categories.map((c) => [c, s])))
+
+export function stageOf(category) {
+  return STAGE_BY_CATEGORY[category] ?? STAGES[1]
+}
+
 export const NODE_ICONS = {
   trigger: '⚡',
   condition: '⋔',

@@ -3,11 +3,15 @@ import {
   Controls,
   MarkerType,
   MiniMap,
+  NodeToolbar,
+  Panel,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStore,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import '../../components/flow/FlowCanvas.css'
@@ -21,6 +25,7 @@ import {
   defaultConfig,
   fromFlow,
   isTrigger,
+  linkOrder,
   nextNodeId,
   parseBlockPayload,
   retypeNode,
@@ -34,17 +39,15 @@ import { channelState, connectionState, databaseState } from '../../connectionSt
 import { airflowApi, automationApi, channelsApi, databaseApi } from '../../services/endpoints'
 import { CHANNEL_KINDS, ENGINES } from '../connections/engines'
 import BlockNode from './BlockNode'
-import { nodeIcon, startsByHand } from './automationText'
+import { STAGES, nodeIcon, stageOf, startsByHand } from './automationText'
 
 const NODE_TYPES = { [BLOCK]: BlockNode }
 const EDGE_OPTIONS = { markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 } }
 // Never zoom past 100% when fitting: a small graph at 2x makes new blocks cover existing ports.
 const FIT_VIEW = { padding: 0.2, maxZoom: 1 }
 const DRAG_TYPE = 'application/x-workflow-block'
-// Orchestration blocks first; the incident-response blocks (diagnose, fix) come last.
-const CATEGORY_ORDER = ['trigger', 'pipeline', 'database', 'logic', 'approval', 'verify', 'output', 'diagnosis', 'action']
+// Sub-headings inside a palette stage that holds several categories.
 const CATEGORY_TITLES = {
-  trigger: 'Start when…',
   pipeline: 'Pipelines (Airflow)',
   database: 'Databases',
   logic: 'Decide & wait',
@@ -54,6 +57,10 @@ const CATEGORY_TITLES = {
   verify: 'Check',
   output: 'Record & notify',
 }
+// The settings popover opens above its block when there is this much room (px), or more room
+// than below; its height is capped to the room it has.
+const POPOVER_ROOM = 260
+const POPOVER_GAP = 12
 const DIRTY_CHANGES = new Set(['position', 'remove', 'add', 'replace'])
 // Replaced in the palette by the real DAGs and databases (still valid in saved workflows).
 const HIDDEN_IN_PALETTE = new Set(['pipeline.run_dag', 'pipeline.wait_for_dag', 'database.run_sql', 'database.check'])
@@ -156,7 +163,7 @@ function SourceItem({ category, preset, title, children, onAdd }) {
   return (
     <button
       type="button"
-      className={`palette-item palette-source block-${category}`}
+      className={`palette-item palette-source stage-${stageOf(category).id}`}
       draggable
       title={title}
       onDragStart={(e) => {
@@ -199,28 +206,41 @@ function PipelineSources({ sources, onAdd }) {
       )}
       {sources.airflow.map(({ conn, state, dags }) => {
         const shown = dags.filter((d) => !q || d.dag_id.toLowerCase().includes(q))
+        if (q && !shown.length) return null
         return (
-          <div key={conn.id} className="palette-source-group">
-            <div className={`palette-source-head ${state.live ? '' : 'palette-source-off'}`} title={state.message ?? state.hint}>
-              {conn.name} · {conn.environment.toLowerCase()}
-              {!state.live && <span> — {state.label}</span>}
+          <details key={conn.id} className="palette-account" open>
+            <summary className="palette-account-head" title={state.message ?? state.hint ?? conn.base_url}>
+              <span className={`palette-account-dot tone-${state.tone}`} aria-label={state.label} />
+              <span className="palette-account-name">{conn.name}</span>
+              <span className={`palette-env env-${conn.environment.toLowerCase()}`}>{conn.environment}</span>
+              <span className="palette-account-count">{state.live ? (q ? `${shown.length}/${dags.length}` : dags.length) : ''}</span>
+            </summary>
+            <div className="palette-account-body">
+              <div className="palette-account-meta">
+                {state.live
+                  ? `Airflow${conn.airflow_version ? ` ${conn.airflow_version}` : ''} · ${dags.length} DAG${dags.length === 1 ? '' : 's'}`
+                  : state.label}
+              </div>
+              {state.live && dags.length === 0 && <p className="muted small">No DAGs synced yet.</p>}
+              {shown.map((dag) => (
+                <SourceItem
+                  key={dag.id}
+                  category="pipeline"
+                  preset={dagPreset(conn, dag)}
+                  title={`${dag.dag_id} (${conn.name})\n${dag.description ?? 'Run it (or wait for it) in a workflow'}`}
+                  onAdd={onAdd}
+                >
+                  <span className="palette-source-name mono">{dag.dag_id}</span>
+                  {dag.is_paused && <span className="palette-tag">paused</span>}
+                </SourceItem>
+              ))}
             </div>
-            {state.live && dags.length === 0 && <p className="muted small">No DAGs synced yet.</p>}
-            {shown.map((dag) => (
-              <SourceItem
-                key={dag.id}
-                category="pipeline"
-                preset={dagPreset(conn, dag)}
-                title={`${dag.dag_id}\n${dag.description ?? 'Run it (or wait for it) in a workflow'}`}
-                onAdd={onAdd}
-              >
-                <span className="palette-source-name mono">{dag.dag_id}</span>
-                {dag.is_paused && <span className="palette-tag">paused</span>}
-              </SourceItem>
-            ))}
-          </div>
+          </details>
         )
       })}
+      {q && sources.airflow.every(({ dags }) => !dags.some((d) => d.dag_id.toLowerCase().includes(q))) && (
+        <p className="muted small">No DAG matches “{query.trim()}”.</p>
+      )}
     </>
   )
 }
@@ -265,47 +285,89 @@ function blankGraph(defs) {
 function Palette({ catalog, trigger, sources, onAdd }) {
   // Blocks that work on an incident only make sense under an incident trigger.
   const incidentOnly = trigger && !trigger.needs_incident
-  const groups = CATEGORY_ORDER.map((category) => ({
-    category,
-    items: catalog.filter((d) => d.category === category && !HIDDEN_IN_PALETTE.has(d.type)),
-  })).filter((g) => g.items.length || SWITCHES[g.category])
   return (
     <aside className="editor-palette" aria-label="Blocks">
       <p className="muted small">Drag a block onto the canvas, or click to add it.</p>
-      {groups.map(({ category, items }) => (
-        <div key={category} className="palette-group">
-          <div className="palette-title">{CATEGORY_TITLES[category] ?? category}</div>
-          {category === 'pipeline' && <PipelineSources sources={sources} onAdd={onAdd} />}
-          {category === 'database' && <DatabaseSources sources={sources} onAdd={onAdd} />}
-          {category === 'output' && <ChannelSources sources={sources} onAdd={onAdd} />}
-          {items.map((def) => {
-            const needsIncident = incidentOnly && def.needs_incident && category !== 'trigger'
-            const disabled = (category === 'trigger' && Boolean(trigger)) || needsIncident
-            const why = category === 'trigger' ? 'A workflow has exactly one trigger' : 'Works on an incident: needs an incident trigger'
+      {STAGES.map((stage) => (
+        <details key={stage.id} className={`palette-stage stage-${stage.id}`} open>
+          <summary className="palette-stage-title">{stage.title}</summary>
+          {stage.categories.map((category) => {
+            const items = catalog.filter((d) => d.category === category && !HIDDEN_IN_PALETTE.has(d.type))
+            if (!items.length && !SWITCHES[category]) return null
             return (
-              <button
-                key={def.type}
-                type="button"
-                className={`palette-item block-${category}`}
-                draggable={!disabled}
-                disabled={disabled}
-                title={disabled ? why : def.description}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData(DRAG_TYPE, def.type)
-                  e.dataTransfer.effectAllowed = 'move'
-                }}
-                onClick={() => onAdd(def.type)}
-              >
-                <span className="block-icon" aria-hidden="true">
-                  {nodeIcon(def.type)}
-                </span>
-                <span>{def.label}</span>
-              </button>
+              <div key={category} className="palette-group">
+                {stage.categories.length > 1 && <div className="palette-title">{CATEGORY_TITLES[category] ?? category}</div>}
+                {category === 'pipeline' && <PipelineSources sources={sources} onAdd={onAdd} />}
+                {category === 'database' && <DatabaseSources sources={sources} onAdd={onAdd} />}
+                {category === 'output' && <ChannelSources sources={sources} onAdd={onAdd} />}
+                {items.map((def) => {
+                  const needsIncident = incidentOnly && def.needs_incident && category !== 'trigger'
+                  const disabled = (category === 'trigger' && Boolean(trigger)) || needsIncident
+                  const why =
+                    category === 'trigger' ? 'A workflow has exactly one trigger' : 'Works on an incident: needs an incident trigger'
+                  return (
+                    <button
+                      key={def.type}
+                      type="button"
+                      className={`palette-item stage-${stage.id}`}
+                      draggable={!disabled}
+                      disabled={disabled}
+                      title={disabled ? why : def.description}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData(DRAG_TYPE, def.type)
+                        e.dataTransfer.effectAllowed = 'move'
+                      }}
+                      onClick={() => onAdd(def.type)}
+                    >
+                      <span className="block-icon" aria-hidden="true">
+                        {nodeIcon(def.type)}
+                      </span>
+                      <span>{def.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
             )
           })}
-        </div>
+        </details>
       ))}
     </aside>
+  )
+}
+
+/**
+ * Floating settings for the selected block, shown above it (below when the block is too close
+ * to the top of the canvas). Keeps the whole width of the page for the canvas.
+ */
+function BlockPopover({ node, onClose, children }) {
+  const ty = useStore((s) => s.transform[1])
+  const zoom = useStore((s) => s.transform[2])
+  const canvasHeight = useStore((s) => s.height)
+  const top = node.position.y * zoom + ty
+  const roomAbove = top - POPOVER_GAP * 2
+  const roomBelow = canvasHeight - (top + (node.measured?.height ?? 120) * zoom) - POPOVER_GAP * 2
+  const above = roomAbove >= POPOVER_ROOM || roomAbove >= roomBelow
+  return (
+    <NodeToolbar
+      nodeId={node.id}
+      isVisible
+      position={above ? Position.Top : Position.Bottom}
+      offset={POPOVER_GAP}
+      style={{ zIndex: 10 }}
+    >
+      <div
+        className="block-popover nodrag nopan nowheel"
+        style={{ maxHeight: Math.min(480, Math.max(160, above ? roomAbove : roomBelow)) }}
+        role="dialog"
+        aria-label="Block settings"
+        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+      >
+        <button type="button" className="block-popover-close" aria-label="Close settings" onClick={onClose}>
+          ×
+        </button>
+        {children}
+      </div>
+    </NodeToolbar>
   )
 }
 
@@ -356,9 +418,19 @@ function Editor() {
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState(null)
+  const [showDetails, setShowDetails] = useState(false)
+  // Block whose settings popover is open: set by clicking a block, not by adding or dragging one.
+  const [popover, setPopover] = useState(null)
   const sources = useSources()
 
   const defs = useMemo(() => Object.fromEntries((catalog ?? []).map((d) => [d.type, d])), [catalog])
+  // An output linked to several blocks shows their run order on each link ("failed · 2").
+  const shownEdges = useMemo(() => {
+    const order = linkOrder(nodes, edges)
+    return edges.map((e) =>
+      order[e.id] ? { ...e, label: e.label ? `${e.label} · ${order[e.id]}` : String(order[e.id]) } : e,
+    )
+  }, [nodes, edges])
 
   // ------------------------------------------------------------------ load
   useEffect(() => {
@@ -533,9 +605,16 @@ function Editor() {
     setDirty(true)
   }
 
+  function clearSelection() {
+    setNodes((current) => current.map((n) => (n.selected ? { ...n, selected: false } : n)))
+    setEdges((current) => current.map((e) => (e.selected ? { ...e, selected: false } : e)))
+    setSelection({ node: null, edge: null })
+  }
+
   function selectNode(nodeId) {
     setNodes((current) => current.map((n) => ({ ...n, selected: n.id === nodeId })))
     setSelection({ node: nodeId, edge: null })
+    setPopover(nodeId)
     const node = nodes.find((n) => n.id === nodeId)
     if (node) fitView({ nodes: [node], padding: 1.5, maxZoom: 1, duration: 300 })
   }
@@ -609,7 +688,7 @@ function Editor() {
   }
   if (!catalog) return <p className="muted">Loading…</p>
 
-  const selectedNode = nodes.find((n) => n.id === selection.node)
+  const selectedNode = selection.node === popover ? nodes.find((n) => n.id === popover) : null
   const selectedEdge = edges.find((e) => e.id === selection.edge)
   const selectedDef = selectedNode && defs[selectedNode.data.nodeType]
 
@@ -650,6 +729,9 @@ function Editor() {
             ▶ Run now
           </Button>
         )}
+        <Button onClick={() => setShowDetails((v) => !v)} aria-pressed={showDetails}>
+          Details
+        </Button>
         {canEdit && <Button onClick={autoLayout}>Tidy layout</Button>}
         <Button onClick={validate} loading={busy === 'validate'}>
           Validate
@@ -661,7 +743,7 @@ function Editor() {
         )}
       </div>
 
-      <div className={`editor-shell ${canEdit ? '' : 'editor-readonly'}`}>
+      <div className={`editor-shell editor-shell-wide ${canEdit ? '' : 'editor-readonly'}`}>
         {canEdit && <Palette
             catalog={catalog}
             trigger={triggerNode && defs[triggerNode.data.nodeType]}
@@ -672,13 +754,14 @@ function Editor() {
         <div className="editor-canvas" ref={wrapper} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={shownEdges}
             nodeTypes={NODE_TYPES}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
             isValidConnection={isValidConnection}
             onSelectionChange={onSelectionChange}
+            onNodeClick={(_, node) => setPopover(node.id)}
             nodesDraggable={canEdit}
             nodesConnectable={canEdit}
             deleteKeyCode={canEdit ? ['Backspace', 'Delete'] : null}
@@ -692,112 +775,119 @@ function Editor() {
             <Background gap={20} />
             <Controls showInteractive={false} />
             <MiniMap pannable zoomable className="editor-minimap" />
+
+            {selectedNode && (
+              <BlockPopover node={selectedNode} onClose={clearSelection}>
+                <div className="panel-head">
+                  <span className={`block-icon stage-${stageOf(selectedDef?.category).id}`} aria-hidden="true">
+                    {nodeIcon(selectedNode.data.nodeType)}
+                  </span>
+                  <div>
+                    <strong>{selectedDef?.label ?? selectedNode.data.nodeType}</strong>
+                    <div className="muted small mono">{selectedNode.id}</div>
+                  </div>
+                </div>
+                {selectedDef?.description && <p className="muted small">{selectedDef.description}</p>}
+                {SWITCHES[selectedDef?.category] && (
+                  <div className="segmented" role="group" aria-label="What this block does">
+                    {SWITCHES[selectedDef.category].map(([type, label]) => (
+                      <button
+                        key={type}
+                        type="button"
+                        className={selectedNode.data.nodeType === type ? 'active' : ''}
+                        aria-pressed={selectedNode.data.nodeType === type}
+                        disabled={!canEdit}
+                        onClick={() => selectedNode.data.nodeType !== type && changeType(selectedNode, type)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {selectedNode.data.problem && <Alert tone="danger">{selectedNode.data.problem}</Alert>}
+                <div className="field">
+                  <label htmlFor="block-name">Display name</label>
+                  <input
+                    id="block-name"
+                    value={selectedNode.data.name}
+                    disabled={!canEdit}
+                    placeholder={selectedDef?.label}
+                    maxLength={200}
+                    onChange={(e) => updateNodeData(selectedNode.id, { name: e.target.value })}
+                  />
+                </div>
+                <SchemaForm
+                  schema={selectedDef?.config_schema}
+                  value={selectedNode.data.config}
+                  disabled={!canEdit}
+                  onChange={(config) => updateNodeData(selectedNode.id, { config })}
+                />
+                {selectedDef?.ports?.length > 0 && (
+                  <p className="muted small">
+                    {selectedDef.ports.length > 1 &&
+                      `Outputs: ${selectedDef.ports.map((p) => selectedDef.port_labels?.[p] ?? p).join(' · ')}. `}
+                    Drag from an output on the right of the block to the next block. An output can link to several
+                    blocks: they run one after another, top to bottom.
+                  </p>
+                )}
+                {canEdit && (
+                  <Button variant="danger" size="sm" onClick={() => deleteNode(selectedNode.id)}>
+                    Delete block
+                  </Button>
+                )}
+              </BlockPopover>
+            )}
+
+            {selectedEdge && (
+              <Panel position="bottom-center" className="canvas-card edge-card">
+                <span className="small">
+                  <span className="mono">{selectedEdge.source}</span> —{selectedEdge.sourceHandle}→{' '}
+                  <span className="mono">{selectedEdge.target}</span>
+                </span>
+                {canEdit && (
+                  <Button variant="danger" size="sm" onClick={() => deleteEdge(selectedEdge.id)}>
+                    Delete connection
+                  </Button>
+                )}
+              </Panel>
+            )}
+
+            {problems.length > 0 && (
+              <Panel position="top-left" className="canvas-card">
+                <Problems problems={problems} onSelect={selectNode} />
+              </Panel>
+            )}
+
+            {showDetails && (
+              <Panel position="top-right" className="canvas-card details-card">
+                <div className="field">
+                  <label htmlFor="wf-description">Description</label>
+                  <textarea
+                    id="wf-description"
+                    rows={3}
+                    maxLength={2000}
+                    value={meta.description}
+                    disabled={!canEdit}
+                    onChange={(e) => {
+                      setMeta((m) => ({ ...m, description: e.target.value }))
+                      setDirty(true)
+                    }}
+                  />
+                </div>
+                <p className="muted small">
+                  Click a block to edit its settings. Runs start at the trigger and follow the output of each block;
+                  an output with no connection ends the run. Every Airflow change on PROD still needs a human
+                  approval.
+                </p>
+                {!isNew && (
+                  <Link className="small" to={`/automation/runs?workflow_id=${workflow.id}`}>
+                    View runs
+                  </Link>
+                )}
+              </Panel>
+            )}
           </ReactFlow>
         </div>
-
-        <aside className="editor-panel" aria-label="Settings">
-          {selectedNode ? (
-            <>
-              <div className="panel-head">
-                <span className="block-icon" aria-hidden="true">
-                  {nodeIcon(selectedNode.data.nodeType)}
-                </span>
-                <div>
-                  <strong>{selectedDef?.label ?? selectedNode.data.nodeType}</strong>
-                  <div className="muted small mono">{selectedNode.id}</div>
-                </div>
-              </div>
-              {selectedDef?.description && <p className="muted small">{selectedDef.description}</p>}
-              {SWITCHES[selectedDef?.category] && (
-                <div className="segmented" role="group" aria-label="What this block does">
-                  {SWITCHES[selectedDef.category].map(([type, label]) => (
-                    <button
-                      key={type}
-                      type="button"
-                      className={selectedNode.data.nodeType === type ? 'active' : ''}
-                      aria-pressed={selectedNode.data.nodeType === type}
-                      disabled={!canEdit}
-                      onClick={() => selectedNode.data.nodeType !== type && changeType(selectedNode, type)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {selectedNode.data.problem && <Alert tone="danger">{selectedNode.data.problem}</Alert>}
-              <div className="field">
-                <label htmlFor="block-name">Display name</label>
-                <input
-                  id="block-name"
-                  value={selectedNode.data.name}
-                  disabled={!canEdit}
-                  placeholder={selectedDef?.label}
-                  maxLength={200}
-                  onChange={(e) => updateNodeData(selectedNode.id, { name: e.target.value })}
-                />
-              </div>
-              <SchemaForm
-                schema={selectedDef?.config_schema}
-                value={selectedNode.data.config}
-                disabled={!canEdit}
-                onChange={(config) => updateNodeData(selectedNode.id, { config })}
-              />
-              {selectedDef?.ports?.length > 0 && (
-                <p className="muted small">
-                  Outputs: {selectedDef.ports.map((p) => selectedDef.port_labels?.[p] ?? p).join(' · ')}. Drag
-                  from an output on the right of the block to the next block.
-                </p>
-              )}
-              {canEdit && (
-                <Button variant="danger" size="sm" onClick={() => deleteNode(selectedNode.id)}>
-                  Delete block
-                </Button>
-              )}
-            </>
-          ) : selectedEdge ? (
-            <>
-              <strong>Connection</strong>
-              <p className="small">
-                <span className="mono">{selectedEdge.source}</span> —{selectedEdge.sourceHandle}→{' '}
-                <span className="mono">{selectedEdge.target}</span>
-              </p>
-              {canEdit && (
-                <Button variant="danger" size="sm" onClick={() => deleteEdge(selectedEdge.id)}>
-                  Delete connection
-                </Button>
-              )}
-            </>
-          ) : (
-            <>
-              <strong>Workflow</strong>
-              <div className="field">
-                <label htmlFor="wf-description">Description</label>
-                <textarea
-                  id="wf-description"
-                  rows={3}
-                  maxLength={2000}
-                  value={meta.description}
-                  disabled={!canEdit}
-                  onChange={(e) => {
-                    setMeta((m) => ({ ...m, description: e.target.value }))
-                    setDirty(true)
-                  }}
-                />
-              </div>
-              <p className="muted small">
-                Select a block to edit its settings. Runs start at the trigger and follow the output of each block;
-                an output with no connection ends the run. Every Airflow change on PROD still needs a human
-                approval.
-              </p>
-              {!isNew && (
-                <Link className="small" to={`/automation/runs?workflow_id=${workflow.id}`}>
-                  View runs
-                </Link>
-              )}
-            </>
-          )}
-          <Problems problems={problems} onSelect={selectNode} />
-        </aside>
       </div>
     </div>
   )

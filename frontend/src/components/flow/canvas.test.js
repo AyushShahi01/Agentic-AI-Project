@@ -14,6 +14,7 @@ import {
   connectionProblem,
   defaultConfig,
   fromFlow,
+  linkOrder,
   nextNodeId,
   parseBlockPayload,
   retypeNode,
@@ -61,9 +62,37 @@ test('connection rules', () => {
   assert.match(c('notify', 'next', 'trigger'), /trigger/)
   assert.match(c('notify', 'next', 'notify'), /itself/)
   assert.match(c('notify', 'next', 'classify'), /loop/)
-  // Re-wiring an already-used port replaces the old edge instead of adding a second one.
-  const rewired = connect({ source: 'retry', sourceHandle: 'failed', target: 'classify' }, edges)
-  assert.equal(rewired.filter((e) => e.source === 'retry' && e.sourceHandle === 'failed').length, 1)
+  assert.match(c('retry', 'failed', 'notify'), /already connected/)
+  // An output can link to several blocks; an exact duplicate is ignored.
+  assert.equal(c('filter', 'true', 'notify'), null)
+  const more = connect({ source: 'filter', sourceHandle: 'true', target: 'notify' }, edges)
+  assert.deepEqual(
+    more.filter((e) => e.source === 'filter' && e.sourceHandle === 'true').map((e) => e.target),
+    ['retry', 'notify'],
+  )
+  assert.equal(connect({ source: 'filter', sourceHandle: 'true', target: 'notify' }, more), more)
+  assert.deepEqual(
+    fromFlow(nodes, more).edges.filter((e) => e.from === 'filter'),
+    [
+      { from: 'filter', port: 'true', to: 'retry' },
+      { from: 'filter', port: 'true', to: 'notify' },
+    ],
+  )
+})
+
+test('link order follows the canvas, top to bottom', () => {
+  const nodes = [
+    { id: 'a', position: { x: 0, y: 0 } },
+    { id: 'low', position: { x: 300, y: 200 } },
+    { id: 'high', position: { x: 300, y: 50 } },
+    { id: 'solo', position: { x: 600, y: 0 } },
+  ]
+  const edges = [
+    { id: 'a:next->low', source: 'a', sourceHandle: 'next', target: 'low' },
+    { id: 'a:next->high', source: 'a', sourceHandle: 'next', target: 'high' },
+    { id: 'high:next->solo', source: 'high', sourceHandle: 'next', target: 'solo' },
+  ]
+  assert.deepEqual(linkOrder(nodes, edges), { 'a:next->high': 1, 'a:next->low': 2 })
 })
 
 test('ids and defaults', () => {

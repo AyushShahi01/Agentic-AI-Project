@@ -315,12 +315,12 @@ def _dag_state(ctx: NodeContext, node: Node) -> NodeResult:
 # ---------------------------------------------------------------------- approval
 
 
-def _proposed_action(ctx: NodeContext, node: Node) -> dict[str, Any]:
-    nxt = ctx.graph.next_node(node.id, "approved")
-    target = ctx.graph.nodes.get(nxt) if nxt else None
-    if target is None:
-        return {}
-    return {"node_id": target.id, "type": target.type, "config": target.config}
+def _proposed_actions(ctx: NodeContext, node: Node) -> list[dict[str, Any]]:
+    """Every block on the "approved" output, in the order they will run."""
+    return [
+        {"node_id": target.id, "type": target.type, "config": target.config}
+        for target in (ctx.graph.nodes[n] for n in ctx.graph.next_nodes(node.id, "approved"))
+    ]
 
 
 _ACTION_TEXT = {
@@ -375,8 +375,11 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
 
     if approval_id is None:
         required_envs = node.config["required_environments"]
-        action = _proposed_action(ctx, node)
-        environment, database = _action_environment(ctx, action)
+        actions = _proposed_actions(ctx, node)
+        targets = [(a, *_action_environment(ctx, a)) for a in actions or [{}]]
+        # One approval covers every linked block: it is needed if any of them needs it.
+        envs = [env for _, env, _ in targets]
+        environment = next((env for env in envs if env in required_envs), envs[0])
         if ctx.dry_run:
             return NodeResult("approved", {"auto": "dry_run"}, "Dry run: approval skipped")
         if required_envs and environment not in required_envs:
@@ -385,7 +388,12 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
                 {"auto": "not_required", "environment": environment},
                 f"No approval needed in {environment}",
             )
-        what = describe_action(action, ctx.incident, database=database or "the database")
+        what = ", then ".join(
+            dict.fromkeys(
+                describe_action(a, ctx.incident, database=database or "the database")
+                for a, _, database in targets
+            )
+        )
         diagnosis = ctx.get_context("diagnosis", {})
         summary = f"The workflow wants to {what} on {environment}."
         if diagnosis:
@@ -401,7 +409,12 @@ def _approval(ctx: NodeContext, node: Node) -> NodeResult:
             node_id=node.id,
             title=f"{subject}: {what}"[:300],
             summary=summary,
-            proposed_action={**action, "description": what, "environment": environment},
+            proposed_action={
+                **(actions[0] if actions else {}),
+                **({"actions": actions} if len(actions) > 1 else {}),
+                "description": what,
+                "environment": environment,
+            },
             status=ApprovalStatus.PENDING,
             expires_at=expires,
         )

@@ -42,8 +42,8 @@ def test_defaults_are_applied() -> None:
     graph = validate_graph(simple())
     assert graph.nodes["t"].config == {"events": ["opened"], "incident_types": []}
     assert graph.nodes["n"].config["channel"] == "in_app"
-    assert graph.next_node("f", "true") == "n"
-    assert graph.next_node("f", "false") is None
+    assert graph.next_nodes("f", "true") == ["n"]
+    assert graph.next_nodes("f", "false") == []
 
 
 def _problems(raw: Any) -> list[dict[str, str]]:
@@ -80,8 +80,8 @@ def mutate(fn) -> dict[str, Any]:  # noqa: ANN001
             "no output port",
         ),
         (
-            mutate(lambda g: g["edges"].append({"from": "f", "port": "true", "to": "c"})),
-            "already connected",
+            mutate(lambda g: g["edges"].append({"from": "f", "port": "true", "to": "n"})),
+            "already connected to 'n'",
         ),
         (
             mutate(lambda g: g["edges"].append({"from": "f", "port": "false", "to": "ghost"})),
@@ -100,6 +100,24 @@ def mutate(fn) -> dict[str, Any]:  # noqa: ANN001
 def test_invalid_graphs(raw: Any, fragment: str) -> None:
     problems = _problems(raw)
     assert any(fragment.lower() in p["message"].lower() for p in problems), problems
+
+
+def test_one_output_can_link_to_several_blocks() -> None:
+    raw = simple()
+    raw["nodes"].append({"id": "u", "type": "incident.update", "config": {"operation": "resolve"}})
+    raw["edges"].append({"from": "f", "port": "true", "to": "u"})
+    graph = validate_graph(raw)
+    assert graph.next_nodes("f", "true") == ["n", "u"]  # no positions: link order
+    assert to_raw(validate_graph(to_raw(graph))) == to_raw(graph)
+
+
+def test_linked_blocks_run_top_to_bottom_on_the_canvas() -> None:
+    raw = simple()
+    raw["nodes"].append({"id": "u", "type": "incident.update", "config": {"operation": "resolve"}})
+    raw["edges"].append({"from": "f", "port": "true", "to": "u"})
+    raw["nodes"][3]["position"] = {"x": 0, "y": 200}  # n: lower
+    raw["nodes"][4]["position"] = {"x": 0, "y": 50}  # u: higher
+    assert validate_graph(raw).next_nodes("f", "true") == ["u", "n"]
 
 
 def test_catalog_lists_ports_and_schemas() -> None:

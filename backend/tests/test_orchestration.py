@@ -520,3 +520,150 @@ def test_orchestration_blocks_are_in_the_catalog(client: TestClient, viewer_head
     assert props["dag_id"]["x-widget"] == "dag"
     assert types["action.clear_failed_tasks"]["needs_incident"] is True
     assert types["database.check"]["needs_incident"] is False
+
+
+# ---------------------------------------------------------------------- one output, several blocks
+
+
+def _notify(node_id: str, y: float) -> dict:
+    return {
+        "id": node_id,
+        "type": "notify",
+        "config": {"message": node_id},
+        "position": {"x": 300, "y": y},
+    }
+
+
+def fan_out(*targets: dict, extra_edges: tuple = ()) -> dict:
+    trigger = {"id": "trigger", "type": "trigger.manual", "config": {}}
+    edges = [{"from": "trigger", "port": "next", "to": t["id"]} for t in targets]
+    return {"nodes": [trigger, *targets], "edges": edges + list(extra_edges)}
+
+
+def test_linked_blocks_run_in_order_top_to_bottom(db: Session, admin: User, clock: Clock) -> None:
+    # Linked lower block first: the canvas position decides the order, not the link order.
+    run = run_now(
+        db, workflow(db, fan_out(_notify("lower", 200), _notify("upper", 50))), admin, clock
+    )
+    assert run.status == RunStatus.COMPLETED
+    assert [n for n, _ in steps(run)] == ["trigger", "upper", "lower"]
+    assert sorted(db.scalars(select(Notification.body)).all()) == ["lower", "upper"]
+
+
+def test_a_failing_branch_does_not_stop_the_others(db: Session, admin: User, clock: Clock) -> None:
+    broken = {
+        "id": "broken",
+        "type": "pipeline.run_dag",
+        "config": {"connection_id": "00000000-0000-4000-8000-000000000000", "dag_id": "gone"},
+        "position": {"x": 300, "y": 0},
+    }
+    run = run_now(db, workflow(db, fan_out(broken, _notify("tell", 100))), admin, clock)
+    assert [(s.node_id, s.status) for s in run.steps] == [
+        ("trigger", "COMPLETED"),
+        ("broken", "FAILED"),
+        ("tell", "COMPLETED"),
+    ]
+    assert run.status == RunStatus.FAILED
+    assert run.error == "The block's Airflow connection no longer exists"
+
+
+def test_a_block_reached_twice_runs_once(db: Session, admin: User, clock: Clock) -> None:
+    join = _notify("join", 300)
+    graph = fan_out(
+        _notify("a", 0),
+        _notify("b", 100),
+        join,
+        extra_edges=(
+            {"from": "a", "port": "next", "to": "join"},
+            {"from": "b", "port": "next", "to": "join"},
+        ),
+    )
+    graph["edges"] = [
+        e for e in graph["edges"] if not (e["from"] == "trigger" and e["to"] == "join")
+    ]
+    run = run_now(db, workflow(db, graph), admin, clock)
+    assert run.status == RunStatus.COMPLETED
+    assert [n for n, _ in steps(run)] == ["trigger", "a", "b", "join"]
+
+
+def test_a_wait_pauses_the_run_and_the_rest_follows(db: Session, admin: User, clock: Clock) -> None:
+    wait = {
+        "id": "wait",
+        "type": "flow.wait",
+        "config": {"minutes": 1},
+        "position": {"x": 300, "y": 0},
+    }
+    run = run_now(db, workflow(db, fan_out(wait, _notify("after", 100))), admin, clock)
+    assert run.status == RunStatus.WAITING
+    assert run.current_node == "wait"
+    assert run.pending_nodes == ["wait", "after"]
+
+    clock.advance(minutes=2)
+    tick(db, clock)
+    run = db.get(WorkflowRun, run.id)
+    assert run.status == RunStatus.COMPLETED
+    assert [n for n, _ in steps(run)] == ["trigger", "wait", "after"]
+
+
+def test_runs_from_before_the_to_do_list_still_resume(
+    db: Session, admin: User, clock: Clock
+) -> None:
+    wait = {"id": "wait", "type": "flow.wait", "config": {"minutes": 1}}
+    run = run_now(db, workflow(db, chain(wait, _notify("after", 0))), admin, clock)
+    run.pending_nodes = None  # as stored by the previous version: only current_node
+    db.commit()
+
+    clock.advance(minutes=2)
+    tick(db, clock)
+    run = db.get(WorkflowRun, run.id)
+    assert run.status == RunStatus.COMPLETED
+    assert [n for n, _ in steps(run)] == ["trigger", "wait", "after"]
+
+
+def test_one_approval_covers_every_linked_block(
+    db: Session, admin: User, clock: Clock, warehouse
+) -> None:
+    dwh = database(db, DeploymentEnvironment.PROD)
+    af = airflow(db, DeploymentEnvironment.PROD)
+    approve = {"id": "ok", "type": "approval.request", "config": {}}
+    load = {
+        "id": "load",
+        "type": "database.run_sql",
+        "config": {"connection_id": dwh, "sql": "INSERT INTO orders (day) VALUES ('d1')"},
+        "position": {"x": 600, "y": 0},
+    }
+    rerun = {
+        "id": "rerun",
+        "type": "pipeline.run_dag",
+        "config": {"connection_id": af, "dag_id": "partner_api_sync", "wait_for_completion": False},
+        "position": {"x": 600, "y": 100},
+    }
+    graph = {
+        "nodes": [{"id": "trigger", "type": "trigger.manual", "config": {}}, approve, rerun, load],
+        "edges": [
+            {"from": "trigger", "port": "next", "to": "ok"},
+            {"from": "ok", "port": "approved", "to": "rerun"},
+            {"from": "ok", "port": "approved", "to": "load"},
+        ],
+    }
+    wf = Workflow(name="Guarded load", graph=graph, mode=WorkflowMode.LIVE)
+    db.add(wf)
+    db.commit()
+    run = run_now(db, wf, admin, clock)
+    assert run.status == RunStatus.WAITING
+    approval = db.scalars(select(Approval)).one()
+    assert approval.title == "Guarded load: run SQL on dwh-prod, then run partner_api_sync"
+    assert [a["node_id"] for a in approval.proposed_action["actions"]] == ["load", "rerun"]
+    assert approval.proposed_action["environment"] == "PROD"
+
+    automation_service.decide(db, approval.id, approve=True, actor=admin, comment=None)
+    tick(db, clock)
+    run = db.get(WorkflowRun, run.id)
+    assert run.status == RunStatus.COMPLETED, run.error
+    assert steps(run) == [
+        ("trigger", "next"),
+        ("ok", "approved"),
+        ("load", "success"),
+        ("rerun", "success"),
+    ]
+    assert count(warehouse, "orders") == 1

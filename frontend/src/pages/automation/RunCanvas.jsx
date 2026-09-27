@@ -2,12 +2,11 @@ import { Background, Controls, MarkerType, ReactFlow, ReactFlowProvider } from '
 import '@xyflow/react/dist/style.css'
 import '../../components/flow/FlowCanvas.css'
 import { useEffect, useMemo, useState } from 'react'
-import { BLOCK, toFlow } from '../../components/flow/graph'
+import { BAD_PORTS, BLOCK, toFlow } from '../../components/flow/graph'
 import { automationApi } from '../../services/endpoints'
 import BlockNode from './BlockNode'
 
 const NODE_TYPES = { [BLOCK]: BlockNode }
-const BAD_PORTS = new Set(['failed', 'rejected', 'false', 'paused', 'busy'])
 
 function stepTone(step) {
   if (step.status === 'FAILED') return 'danger'
@@ -40,15 +39,17 @@ export default function RunCanvas({ run }) {
         run: step ? { tone: stepTone(step), label: step.message } : null,
       }
     })
+    // A link is lit when its output was taken and the block it leads to ran.
     const taken = new Set(run.steps.filter((s) => s.port).map((s) => `${s.node_id}:${s.port}`))
+    const reached = new Set(run.steps.map((s) => s.node_id))
     return {
       nodes: nodes.map((n) => ({ ...n, draggable: false, selectable: false })),
       edges: edges.map((e) => {
-        const hit = taken.has(e.id)
+        const hit = taken.has(`${e.source}:${e.sourceHandle}`) && reached.has(e.target)
         return {
           ...e,
           animated: hit,
-          className: hit ? 'edge-taken' : 'edge-idle',
+          className: `${e.className} ${hit ? 'edge-taken' : 'edge-idle'}`,
           markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18 },
         }
       }),

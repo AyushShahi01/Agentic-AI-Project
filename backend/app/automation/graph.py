@@ -487,21 +487,31 @@ class Node:
     type: str
     name: str | None
     config: dict[str, Any]
-    position: dict[str, float] | None = None  # canvas layout only; ignored by the engine
+    # Canvas layout; the engine only uses it to order blocks linked from the same output.
+    position: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
 class Graph:
     nodes: dict[str, Node]
-    edges: dict[tuple[str, str], str]  # (from, port) -> to
+    edges: dict[tuple[str, str], list[str]]  # (from, port) -> [to, ...] in link order
     trigger_id: str
 
     @property
     def trigger(self) -> Node:
         return self.nodes[self.trigger_id]
 
-    def next_node(self, node_id: str, port: str) -> str | None:
-        return self.edges.get((node_id, port))
+    def next_nodes(self, node_id: str, port: str) -> list[str]:
+        """Blocks linked from an output, in run order: top to bottom (then left to right) on
+        the canvas; blocks without a position keep link order, after the positioned ones."""
+        targets = self.edges.get((node_id, port), [])
+
+        def key(indexed: tuple[int, str]) -> tuple[int, float, float, int]:
+            index, target = indexed
+            pos = self.nodes[target].position
+            return (0, pos["y"], pos["x"], index) if pos else (1, 0.0, 0.0, index)
+
+        return [t for _, t in sorted(enumerate(targets), key=key)]
 
 
 def _problem(message: str, **where: str) -> dict[str, str]:
@@ -558,7 +568,7 @@ def validate_graph(raw: Any) -> Graph:
         )
 
     raw_ids = {str(n.get("id")) for n in raw_nodes if isinstance(n, dict)}
-    edges: dict[tuple[str, str], str] = {}
+    edges: dict[tuple[str, str], list[str]] = {}
     for index, item in enumerate(raw_edges):
         label = f"Edge #{index + 1}"
         if not isinstance(item, dict):
@@ -578,10 +588,12 @@ def validate_graph(raw: Any) -> Graph:
         if nodes[dst].type in TRIGGER_TYPES:
             problems.append(_problem(f"{label} cannot point at a trigger", edge=edge))
             continue
-        if (src, port) in edges:
-            problems.append(_problem(f"{label}: port '{port}' of '{src}' is already connected"))
+        if dst in edges.get((src, port), []):
+            problems.append(
+                _problem(f"{label}: port '{port}' of '{src}' is already connected to '{dst}'")
+            )
             continue
-        edges[(src, port)] = dst
+        edges.setdefault((src, port), []).append(dst)
 
     triggers = [n.id for n in nodes.values() if n.type in TRIGGER_TYPES]
     if len(triggers) != 1 and not problems:
@@ -622,8 +634,8 @@ def _position(raw: Any) -> tuple[dict[str, float] | None, str | None]:
 
 def _check_acyclic_and_reachable(graph: Graph) -> None:
     adjacency: dict[str, list[str]] = {n: [] for n in graph.nodes}
-    for (src, _), dst in graph.edges.items():
-        adjacency[src].append(dst)
+    for (src, _), targets in graph.edges.items():
+        adjacency[src].extend(targets)
 
     visiting: set[str] = set()
     done: set[str] = set()
@@ -670,7 +682,11 @@ def to_raw(graph: Graph) -> dict[str, Any]:
             }
             for n in graph.nodes.values()
         ],
-        "edges": [{"from": s, "port": p, "to": d} for (s, p), d in graph.edges.items()],
+        "edges": [
+            {"from": s, "port": p, "to": d}
+            for (s, p), targets in graph.edges.items()
+            for d in targets
+        ],
     }
 
 

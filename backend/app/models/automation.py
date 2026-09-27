@@ -65,6 +65,8 @@ class WorkflowRun(TimestampMixin, Base):
     )
     dry_run: Mapped[bool] = mapped_column(default=False)
     current_node: Mapped[str | None] = mapped_column(String(100))
+    # Blocks still to run, in order (head = current_node). None on runs from before fan-out.
+    pending_nodes: Mapped[list[str] | None] = mapped_column(JSON)
     context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     wake_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     claimed_until: Mapped[datetime | None] = mapped_column(UTCDateTime())

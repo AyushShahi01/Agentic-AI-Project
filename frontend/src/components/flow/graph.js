@@ -9,17 +9,21 @@ export function isTrigger(type) {
   return type.startsWith('trigger.')
 }
 
-export function edgeId(from, port) {
-  return `${from}:${port}`
+// Output ports taken when something went wrong or the answer was "no".
+export const BAD_PORTS = new Set(['failed', 'fail', 'rejected', 'false', 'timeout', 'paused', 'busy'])
+
+export function edgeId(from, port, to) {
+  return `${from}:${port}->${to}`
 }
 
 function toEdge(from, port, to, extra = {}) {
   return {
-    id: edgeId(from, port),
+    id: edgeId(from, port, to),
     source: from,
     sourceHandle: port,
     target: to,
     label: port === 'next' ? undefined : port,
+    className: BAD_PORTS.has(port) ? 'edge-bad' : 'edge-ok',
     ...extra,
   }
 }
@@ -73,8 +77,8 @@ function reaches(start, goal, edges) {
 }
 
 /**
- * Why a connection is not allowed (or null if it is). A connection from a port that is
- * already wired is allowed: it replaces the existing edge.
+ * Why a connection is not allowed (or null if it is). One output may link to several blocks;
+ * they run one after another, top to bottom on the canvas.
  */
 export function connectionProblem(connection, nodes, edges) {
   const { source, target, sourceHandle } = connection
@@ -83,15 +87,37 @@ export function connectionProblem(connection, nodes, edges) {
   const targetNode = nodes.find((n) => n.id === target)
   if (!targetNode) return 'Unknown block'
   if (isTrigger(targetNode.data.nodeType)) return 'Nothing can connect into a trigger'
-  const others = edges.filter((e) => !(e.source === source && e.sourceHandle === sourceHandle))
-  if (reaches(target, source, others)) return 'That would create a loop'
+  if (edges.some((e) => e.source === source && e.sourceHandle === sourceHandle && e.target === target)) {
+    return 'That output is already connected to this block'
+  }
+  if (reaches(target, source, edges)) return 'That would create a loop'
   return null
 }
 
-/** Add an edge, replacing any existing edge from the same output port. */
+/** Add an edge (an exact duplicate is ignored). */
 export function connect(connection, edges) {
-  const kept = edges.filter((e) => !(e.source === connection.source && e.sourceHandle === connection.sourceHandle))
-  return [...kept, newEdge(connection)]
+  const edge = newEdge(connection)
+  return edges.some((e) => e.id === edge.id) ? edges : [...edges, edge]
+}
+
+/**
+ * Run order of blocks linked from the same output, as shown on the canvas: top to bottom, then
+ * left to right (the backend uses the same rule). Returns {edgeId: 1-based position} for
+ * outputs with more than one link.
+ */
+export function linkOrder(nodes, edges) {
+  const pos = Object.fromEntries(nodes.map((n) => [n.id, n.position]))
+  const groups = {}
+  edges.forEach((e) => (groups[`${e.source}:${e.sourceHandle}`] ??= []).push(e))
+  const order = {}
+  Object.values(groups).forEach((group) => {
+    if (group.length < 2) return
+    const sorted = group
+      .map((e, index) => ({ e, index, p: pos[e.target] }))
+      .sort((a, b) => (a.p?.y ?? 0) - (b.p?.y ?? 0) || (a.p?.x ?? 0) - (b.p?.x ?? 0) || a.index - b.index)
+    sorted.forEach(({ e }, i) => (order[e.id] = i + 1))
+  })
+  return order
 }
 
 /** Readable unique id for a new block, e.g. `notify_2`. */

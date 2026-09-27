@@ -46,9 +46,20 @@ test('workflow editor: build, save, reload, validate', async ({ page }) => {
     page.locator('.react-flow__handle[data-nodeid="trigger"][data-handleid="next"]'),
     page.locator('.react-flow__handle.target[data-nodeid="notify_1"]'),
   )
-  await expect(page.getByTestId('rf__edge-trigger:next')).toBeAttached()
+  await expect(page.getByTestId('rf__edge-trigger:next->notify_1')).toBeAttached()
 
-  // Configure the block in the side panel.
+  // The same output can also lead to a second block; both run, top to bottom.
+  await page.getByRole('button', { name: 'Tell someone' }).click()
+  await expect(node(page, 'notify_2')).toBeVisible()
+  await dragBetween(
+    page,
+    page.locator('.react-flow__handle[data-nodeid="trigger"][data-handleid="next"]'),
+    page.locator('.react-flow__handle.target[data-nodeid="notify_2"]'),
+  )
+  await expect(page.getByTestId('rf__edge-trigger:next->notify_2')).toBeAttached()
+  await expect(page.getByTestId('rf__edge-trigger:next->notify_1')).toBeAttached()
+
+  // Configure the block in its settings popover.
   await node(page, 'notify_1').click()
   await page.getByLabel('Display name').fill('Tell the team')
   await expect(node(page, 'notify_1')).toContainText('Tell the team')
@@ -61,18 +72,19 @@ test('workflow editor: build, save, reload, validate', async ({ page }) => {
   // Reload: same blocks, same wiring.
   await page.reload()
   await expect(node(page, 'notify_1')).toContainText('Tell the team')
-  await expect(page.getByTestId('rf__edge-trigger:next')).toBeAttached()
+  await expect(page.getByTestId('rf__edge-trigger:next->notify_1')).toBeAttached()
+  await expect(page.getByTestId('rf__edge-trigger:next->notify_2')).toBeAttached()
   await expect(page.getByLabel('Workflow name')).toHaveValue('E2E workflow')
 
   // Break the wiring: the server reports the orphaned block and the canvas highlights it.
   // Click the middle of the drawn edge (its bounding-box centre can sit under a block).
-  const mid = await page.getByTestId('rf__edge-trigger:next').locator('path.react-flow__edge-path').evaluate((path) => {
+  const mid = await page.getByTestId('rf__edge-trigger:next->notify_1').locator('path.react-flow__edge-path').evaluate((path) => {
     const p = path.getPointAtLength(path.getTotalLength() / 2)
     const m = path.getScreenCTM()
     return { x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f }
   })
   await page.mouse.click(mid.x, mid.y)
-  await expect(page.getByTestId('rf__edge-trigger:next')).toHaveClass(/selected/)
+  await expect(page.getByTestId('rf__edge-trigger:next->notify_1')).toHaveClass(/selected/)
   await page.keyboard.press('Delete')
   await expect(node(page, 'notify_1')).toBeVisible()
   await page.getByRole('button', { name: 'Validate' }).click()
@@ -173,7 +185,9 @@ test('orchestration: drag a real DAG from the palette and run it now', async ({ 
 
   // The palette lists the actual DAGs of the live connection; the generic block is gone.
   const palette = page.locator('.editor-palette')
-  await expect(palette).toContainText('mock-dev · dev')
+  const account = palette.locator('.palette-account', { hasText: 'mock-dev' })
+  await expect(account.locator('.palette-account-head')).toContainText('DEV')
+  await expect(account.getByRole('button', { name: 'orders_pipeline', exact: true })).toBeVisible()
   await expect(palette.getByRole('button', { name: 'Run a DAG' })).toHaveCount(0)
   const dagItem = palette.getByRole('button', { name: 'orders_pipeline', exact: true })
   await dagItem.dragTo(page.locator('.editor-canvas'), { targetPosition: { x: 470, y: 80 } })
@@ -186,7 +200,7 @@ test('orchestration: drag a real DAG from the palette and run it now', async ({ 
     page.locator('.react-flow__handle[data-nodeid="trigger"][data-handleid="next"]'),
     page.locator('.react-flow__handle.target[data-nodeid="orders_pipeline_1"]'),
   )
-  await expect(page.getByTestId('rf__edge-trigger:next')).toBeAttached()
+  await expect(page.getByTestId('rf__edge-trigger:next->orders_pipeline_1')).toBeAttached()
 
   // Incident-only blocks are greyed out under a Run-on-demand trigger.
   await expect(page.getByRole('button', { name: 'Retry failed tasks' })).toBeDisabled()

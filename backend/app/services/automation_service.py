@@ -491,6 +491,9 @@ def _finish(
     )
 
 
+_DONE_STEPS = frozenset({StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.SKIPPED})
+
+
 def _waiting_step(run: WorkflowRun, node_id: str) -> WorkflowStep | None:
     for step in reversed(run.steps):
         if step.node_id == node_id and step.status == StepStatus.WAITING:
@@ -557,8 +560,22 @@ def _advance(db: Session, run: WorkflowRun, now: datetime, max_steps: int) -> No
         db=db, run=run, graph=graph, incident=incident, now=now, settings=get_settings()
     )
 
+    # To-do list of blocks. Runs started before it existed only have `current_node`.
+    queue = (
+        list(run.pending_nodes)
+        if run.pending_nodes is not None
+        else [run.current_node or graph.trigger_id]
+    )
+    done = {s.node_id for s in run.steps if s.status in _DONE_STEPS}
+
     for _ in range(max_steps):
-        node = graph.nodes[run.current_node or graph.trigger_id]
+        if not queue:
+            break
+        node = graph.nodes[queue[0]]
+        if node.id in done:  # reached again through another branch: blocks run once
+            _set_queue(run, queue[1:])
+            queue = queue[1:]
+            continue
         step = _waiting_step(run, node.id)
 
         if (
@@ -587,11 +604,15 @@ def _advance(db: Session, run: WorkflowRun, now: datetime, max_steps: int) -> No
         try:
             result: NodeResult = EXECUTORS[node.type](ctx, node)
         except NodeError as exc:
+            # The block's outputs are not followed, but other queued branches still run.
             step.status = StepStatus.FAILED
             step.message = str(exc)
             step.finished_at = now
-            _finish(db, run, RunStatus.FAILED, now, error=str(exc))
-            return
+            done.add(node.id)
+            queue = queue[1:]
+            _set_queue(run, queue)
+            db.commit()
+            continue
 
         step.message = result.message
         step.output = result.output
@@ -599,21 +620,36 @@ def _advance(db: Session, run: WorkflowRun, now: datetime, max_steps: int) -> No
             step.status = StepStatus.WAITING
             run.status = RunStatus.WAITING
             run.wake_at = result.wait_until
+            _set_queue(run, queue)
             db.commit()
             return
 
         step.status = StepStatus.COMPLETED
         step.port = result.port
         step.finished_at = now
-        nxt = graph.next_node(node.id, result.port or "")
-        if nxt is None:
+        done.add(node.id)
+        following = graph.next_nodes(node.id, result.port or "")
+        if not following:
             run.context = {**(run.context or {}), "outcome": f"{node.id}.{result.port}"}
-            _finish(db, run, RunStatus.COMPLETED, now)
-            return
-        run.current_node = nxt
+        queue = queue[1:] + [n for n in following if n not in done and n not in queue]
+        _set_queue(run, queue)
         db.commit()
 
-    _finish(db, run, RunStatus.FAILED, now, error=f"Stopped after {max_steps} steps")
+    if queue:
+        _finish(db, run, RunStatus.FAILED, now, error=f"Stopped after {max_steps} steps")
+        return
+
+    errors = [s.message or "Step failed" for s in run.steps if s.status == StepStatus.FAILED]
+    if errors:
+        _finish(db, run, RunStatus.FAILED, now, error="; ".join(errors))
+    else:
+        _finish(db, run, RunStatus.COMPLETED, now)
+
+
+def _set_queue(run: WorkflowRun, queue: list[str]) -> None:
+    run.pending_nodes = list(queue)
+    if queue:
+        run.current_node = queue[0]
 
 
 def _candidates(db: Session, now: datetime) -> list[uuid.UUID]:
