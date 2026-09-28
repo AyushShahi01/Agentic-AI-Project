@@ -275,11 +275,67 @@ function DatabaseSources({ sources, onAdd }) {
 }
 
 function blankGraph(defs) {
-  const type = 'trigger.manual'
+  // Monitoring first: a new workflow reacts to incidents on the monitored pipelines.
+  const type = 'trigger.incident'
   return {
     nodes: [{ id: 'trigger', type, config: defaultConfig(defs[type]?.config_schema), position: { x: 0, y: 0 } }],
     edges: [],
   }
+}
+
+function TriggerItem({ def, current, stageId, onAdd }) {
+  return (
+    <button
+      type="button"
+      className={`palette-item stage-${stageId} ${current ? 'palette-current' : ''}`}
+      aria-pressed={current}
+      draggable
+      title={current ? `${def.description} (the current trigger)` : `${def.description} Replaces the current trigger.`}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_TYPE, def.type)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onClick={() => onAdd(def.type)}
+    >
+      <span className="block-icon" aria-hidden="true">
+        {nodeIcon(def.type)}
+      </span>
+      <span>{def.label}</span>
+      {current && <span className="palette-tag">current</span>}
+    </button>
+  )
+}
+
+/**
+ * "Start when…": incident triggers (monitoring) first; "Run on demand" and "On a schedule" sit in a
+ * collapsed Orchestration group that opens when the workflow uses one of them. A workflow has one
+ * trigger, so picking another replaces it.
+ */
+function TriggerItems({ items, current, stageId, onAdd }) {
+  const usesOrchestration = Boolean(current && !current.needs_incident)
+  const [open, setOpen] = useState(usesOrchestration)
+  // Open the group when the workflow switches to one of its triggers (state adjusted during render).
+  const [wasUsing, setWasUsing] = useState(usesOrchestration)
+  if (usesOrchestration !== wasUsing) {
+    setWasUsing(usesOrchestration)
+    if (usesOrchestration) setOpen(true)
+  }
+  const item = (def) => (
+    <TriggerItem key={def.type} def={def} current={current?.type === def.type} stageId={stageId} onAdd={onAdd} />
+  )
+  const orchestration = items.filter((d) => !d.needs_incident)
+  return (
+    <>
+      {items.filter((d) => d.needs_incident).map(item)}
+      {orchestration.length > 0 && (
+        <details className="palette-sub" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+          <summary className="palette-sub-title">Orchestration</summary>
+          <p className="muted small">Start without an incident: by hand or on a clock.</p>
+          {orchestration.map(item)}
+        </details>
+      )}
+    </>
+  )
 }
 
 function Palette({ catalog, trigger, sources, onAdd }) {
@@ -300,11 +356,11 @@ function Palette({ catalog, trigger, sources, onAdd }) {
                 {category === 'pipeline' && <PipelineSources sources={sources} onAdd={onAdd} />}
                 {category === 'database' && <DatabaseSources sources={sources} onAdd={onAdd} />}
                 {category === 'output' && <ChannelSources sources={sources} onAdd={onAdd} />}
-                {items.map((def) => {
-                  const needsIncident = incidentOnly && def.needs_incident && category !== 'trigger'
-                  const disabled = (category === 'trigger' && Boolean(trigger)) || needsIncident
-                  const why =
-                    category === 'trigger' ? 'A workflow has exactly one trigger' : 'Works on an incident: needs an incident trigger'
+                {category === 'trigger' && <TriggerItems items={items} current={trigger} stageId={stage.id} onAdd={onAdd} />}
+                {category !== 'trigger' &&
+                  items.map((def) => {
+                  const disabled = incidentOnly && def.needs_incident
+                  const why = 'Works on an incident: needs an incident trigger'
                   return (
                     <button
                       key={def.type}
@@ -528,7 +584,6 @@ function Editor() {
   }, [])
 
   const triggerNode = nodes.find((n) => isTrigger(n.data.nodeType))
-  const hasTrigger = Boolean(triggerNode)
   const canRun = hasRole('ADMIN', 'OPERATOR') && !isNew && workflow && startsByHand(workflow.graph)
 
   async function runNow() {
@@ -548,7 +603,7 @@ function Editor() {
   /** `block` is a type, or a palette preset `{type, name, config, idBase}` (a real DAG/database). */
   function addBlock(block, position) {
     const { type, name = '', config = {}, idBase } = typeof block === 'string' ? { type: block } : block
-    if (isTrigger(type) && hasTrigger) return toast.error('A workflow has exactly one trigger')
+    if (isTrigger(type) && triggerNode) return replaceTrigger(type)
     const def = defs[type]
     let at = position
     if (!at) {
@@ -585,6 +640,30 @@ function Editor() {
     setNodes((current) => current.map((n) => (n.id === node.id ? updated : n)))
     setEdges(kept)
     setDirty(true)
+  }
+
+  /** A workflow has exactly one trigger: switch it in place (same id, position and link). */
+  function replaceTrigger(type) {
+    const def = defs[type]
+    if (!def || type === triggerNode.data.nodeType) return
+    changeType(triggerNode, type)
+    if (def.needs_incident) {
+      applyProblems([])
+      return
+    }
+    const blocked = nodes.filter((n) => !isTrigger(n.data.nodeType) && defs[n.data.nodeType]?.needs_incident)
+    if (blocked.length) {
+      applyProblems(
+        blocked.map((n) => ({
+          node: n.id,
+          message: `'${defs[n.data.nodeType].label}' works on an incident, so it needs an incident trigger`,
+        })),
+      )
+      toast.error(
+        `${blocked.length} block${blocked.length === 1 ? '' : 's'} need${blocked.length === 1 ? 's' : ''} an incident: ` +
+          'switch back to an incident trigger or remove them',
+      )
+    }
   }
 
   function updateNodeData(nodeId, patch) {
@@ -802,6 +881,36 @@ function Editor() {
                         {label}
                       </button>
                     ))}
+                  </div>
+                )}
+                {selectedDef?.category === 'trigger' && (
+                  <div className="field">
+                    <label htmlFor="block-trigger">Starts</label>
+                    <select
+                      id="block-trigger"
+                      value={selectedNode.data.nodeType}
+                      disabled={!canEdit}
+                      onChange={(e) => replaceTrigger(e.target.value)}
+                    >
+                      <optgroup label="Monitoring">
+                        {catalog
+                          .filter((d) => d.category === 'trigger' && d.needs_incident)
+                          .map((d) => (
+                            <option key={d.type} value={d.type}>
+                              {d.label}
+                            </option>
+                          ))}
+                      </optgroup>
+                      <optgroup label="Orchestration">
+                        {catalog
+                          .filter((d) => d.category === 'trigger' && !d.needs_incident)
+                          .map((d) => (
+                            <option key={d.type} value={d.type}>
+                              {d.label}
+                            </option>
+                          ))}
+                      </optgroup>
+                    </select>
                   </div>
                 )}
                 {selectedNode.data.problem && <Alert tone="danger">{selectedNode.data.problem}</Alert>}

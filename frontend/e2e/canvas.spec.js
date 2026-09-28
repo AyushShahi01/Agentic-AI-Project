@@ -27,6 +27,14 @@ async function dragBetween(page, from, to) {
 
 const node = (page, id) => page.locator(`.react-flow__node[data-id="${id}"]`)
 
+/** New workflows react to incidents; switch the trigger to "Run on demand" for "Run now" flows. */
+async function startByHand(page) {
+  const palette = page.locator('.editor-palette')
+  await palette.locator('.palette-sub-title', { hasText: 'Orchestration' }).click()
+  await palette.getByRole('button', { name: 'Run on demand' }).click()
+  await expect(node(page, 'trigger')).toContainText('Run on demand')
+}
+
 test.beforeEach(async ({ page }) => {
   await login(page)
 })
@@ -34,6 +42,10 @@ test.beforeEach(async ({ page }) => {
 test('workflow editor: build, save, reload, validate', async ({ page }) => {
   await page.goto('/automation/workflows/new')
   await expect(node(page, 'trigger')).toBeVisible()
+
+  // Monitoring first: a new workflow starts from an incident, so the incident blocks are usable.
+  await expect(node(page, 'trigger')).toContainText('When an incident opens or recurs')
+  await expect(page.getByRole('button', { name: 'Retry failed tasks' })).toBeEnabled()
 
   // Drag "Tell someone" from the palette onto the canvas.
   const canvas = page.locator('.editor-canvas')
@@ -181,7 +193,7 @@ test('run replay shows the path a real run took', async ({ page }) => {
 
 test('orchestration: drag a real DAG from the palette and run it now', async ({ page }) => {
   await page.goto('/automation/workflows/new')
-  await expect(node(page, 'trigger')).toContainText('Run on demand')
+  await startByHand(page)
 
   // The palette lists the actual DAGs of the live connection; the generic block is gone.
   const palette = page.locator('.editor-palette')
@@ -263,6 +275,7 @@ test('notification channel: test message and a workflow that sends through it', 
 
     // The channel is a palette component; dropping it gives a "Tell someone" that sends out.
     await page.goto('/automation/workflows/new')
+    await startByHand(page)
     await page
       .locator('.editor-palette')
       .getByRole('button', { name: /E2E hook/ })

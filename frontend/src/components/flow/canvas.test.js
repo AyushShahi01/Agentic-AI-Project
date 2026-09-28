@@ -256,3 +256,23 @@ test('parseBlockPayload accepts JSON presets and bare types', () => {
   assert.equal(parseBlockPayload('{broken'), null)
   assert.equal(parseBlockPayload(''), null)
 })
+
+test('switching the trigger keeps its id, position and link', () => {
+  const { nodes, edges } = toFlow(retryGraph)
+  const trigger = nodes.find((n) => n.id === 'trigger')
+  const manual = { type: 'trigger.manual', ports: ['next'], config_schema: { properties: {} } }
+  const schedule = {
+    type: 'trigger.schedule',
+    ports: ['next'],
+    config_schema: { properties: { every_minutes: { default: 60 } } },
+  }
+  const toManual = retypeNode(trigger, manual, edges)
+  assert.equal(toManual.node.id, 'trigger')
+  assert.deepEqual(toManual.node.position, trigger.position)
+  assert.deepEqual(toManual.node.data.config, {})
+  assert.deepEqual(toManual.edges, edges)
+  const toSchedule = retypeNode(toManual.node, schedule, toManual.edges)
+  assert.equal(toSchedule.node.data.nodeType, 'trigger.schedule')
+  assert.deepEqual(toSchedule.node.data.config, { every_minutes: 60 })
+  assert.ok(toSchedule.edges.some((e) => e.source === 'trigger' && e.target === 'classify'))
+})
