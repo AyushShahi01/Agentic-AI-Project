@@ -1,5 +1,6 @@
 from app.models.airflow import (
     AirflowConnection,
+    AirflowTriggerReservation,
     ConnectionKind,
     DeploymentEnvironment,
     MonitoredDag,
@@ -30,6 +31,7 @@ from app.models.user import RefreshToken, User, UserRole
 __all__ = [
     "ActorType",
     "AirflowConnection",
+    "AirflowTriggerReservation",
     "Approval",
     "AuditLog",
     "ChannelKind",

@@ -486,6 +486,44 @@ def test_sla_rerun_on_paused_dag_only_notifies(db: Session, partner_clock: Clock
     assert writes().triggered == {}
 
 
+def test_active_dag_trigger_is_deduplicated_across_workflow_runs(
+    db: Session, partner_clock: Clock, admin: User
+) -> None:
+    conn, dags = make_env(db, DeploymentEnvironment.DEV, "legacy_inventory_sync")
+    workflow = automation_service.create_workflow(
+        db,
+        actor=admin,
+        name="Trigger once",
+        graph={
+            "nodes": [
+                {"id": "trigger", "type": "trigger.incident", "config": {"events": ["opened"]}},
+                {
+                    "id": "run",
+                    "type": "action.trigger_dag_run",
+                    "config": {},
+                },
+            ],
+            "edges": [{"from": "trigger", "port": "next", "to": "run"}],
+        },
+    )
+    workflow.enabled = True
+    db.commit()
+    first = make_incident(db, conn, dags["legacy_inventory_sync"], partner_clock(), key=":first")
+    second = make_incident(db, conn, dags["legacy_inventory_sync"], partner_clock(), key=":second")
+    automation_service.enqueue_for_incident(db, first, TriggerEvent.OPENED, now=partner_clock())
+    automation_service.enqueue_for_incident(db, second, TriggerEvent.OPENED, now=partner_clock())
+    db.commit()
+
+    tick(db, partner_clock)
+
+    assert len(writes().triggered["legacy_inventory_sync"]) == 1
+    runs = db.scalars(select(WorkflowRun).order_by(WorkflowRun.created_at)).all()
+    assert runs[0].status == RunStatus.COMPLETED
+    assert runs[1].status == RunStatus.COMPLETED
+    assert runs[1].steps[-1].port == "failed"
+    assert "active" in (runs[1].steps[-1].output.get("error", "").lower())
+
+
 def test_flapping_breaker_pauses_after_approval(
     db: Session, orders_clock: Clock, operator: User
 ) -> None:

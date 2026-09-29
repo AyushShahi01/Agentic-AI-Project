@@ -94,6 +94,19 @@ def test_cycle_refreshes_dags_and_marks_healthy(
     assert present == {"etl_a": True, "etl_b": False}
 
 
+def test_cycle_skips_fresh_dag_sync(
+    db: Session, airflow: Switchable, conn_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection_monitor_service.run_cycle(db)
+    monkeypatch.setattr(get_settings(), "AIRFLOW_DAG_SYNC_MIN_INTERVAL_SECONDS", 3600)
+    airflow.server.dags = []
+
+    summary = connection_monitor_service.run_cycle(db)
+
+    assert summary.skipped == 1
+    assert {d.dag_id for d in db.scalars(select(MonitoredDag)).all()} == {"etl_a", "etl_b"}
+
+
 def test_outage_and_recovery_are_detected_and_audited_once(
     db: Session, airflow: Switchable, conn_id: uuid.UUID
 ) -> None:

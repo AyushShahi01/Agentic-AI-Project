@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     # connection counts as live only if it answered within ~2 intervals (see airflow_service).
     AIRFLOW_MONITOR_ENABLED: bool = True
     AIRFLOW_MONITOR_INTERVAL_SECONDS: int = 30
+    # Zero preserves the existing every-cycle monitor behavior; raise this to reuse fresh DAG lists.
+    AIRFLOW_DAG_SYNC_MIN_INTERVAL_SECONDS: int = 0
 
     # Database connections (catalog). Empty allowlist = any host. The connection monitor
     # re-checks them on the same interval as Airflow connections.
@@ -75,6 +77,7 @@ class Settings(BaseSettings):
     AUTOMATION_MAX_ACTIONS_PER_DAG_PER_DAY: int = 3
     AUTOMATION_MAX_STEPS_PER_RUN: int = 50
     AUTOMATION_VERIFY_POLL_SECONDS: int = 60
+    AUTOMATION_TRIGGER_RESERVATION_SECONDS: int = 300
     AUTOMATION_WEBHOOK_ALLOWED_HOSTS: list[str] = []
     AUTOMATION_WEBHOOK_TIMEOUT_SECONDS: float = 5
     # Where people open the app; used for links in emails/Slack/Teams (run and approval pages).

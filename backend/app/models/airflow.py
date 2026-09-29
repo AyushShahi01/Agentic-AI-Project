@@ -132,3 +132,24 @@ class MonitoredDag(TimestampMixin, Base):
     detection_watermark: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
     connection: Mapped[AirflowConnection] = relationship(back_populates="dags")
+
+
+class AirflowTriggerReservation(TimestampMixin, Base):
+    """Database guard for a DAG trigger that may still be active in Airflow."""
+
+    __tablename__ = "airflow_trigger_reservations"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "dag_id"),
+        Index("ix_airflow_trigger_reservations_workflow_run", "workflow_run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("airflow_connections.id", ondelete="CASCADE"), index=True
+    )
+    dag_id: Mapped[str] = mapped_column(String(250))
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True
+    )
+    node_id: Mapped[str] = mapped_column(String(100))
+    airflow_run_id: Mapped[str | None] = mapped_column(String(250))
