@@ -6,6 +6,7 @@ Time is controlled: the mock Airflow clock and the engine's `now` are the same C
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import anyio
 import httpx
@@ -35,7 +36,7 @@ from app.models.user import User
 from app.orchestration.airflow import mock as mock_module
 from app.orchestration.airflow.base import AdapterConfig, AuthType
 from app.orchestration.airflow.mock import MOCK_DAGS, MockAirflowAdapter
-from app.services import automation_nodes, automation_service, detection_service
+from app.services import airflow_service, automation_nodes, automation_service, detection_service
 
 BASE_URL = "http://mock-airflow"
 
@@ -522,6 +523,76 @@ def test_active_dag_trigger_is_deduplicated_across_workflow_runs(
     assert runs[1].status == RunStatus.COMPLETED
     assert runs[1].steps[-1].port == "failed"
     assert "active" in (runs[1].steps[-1].output.get("error", "").lower())
+
+
+def test_terminal_reserved_run_allows_retry_but_active_duplicate_is_blocked(
+    db: Session, partner_clock: Clock, admin: User
+) -> None:
+    conn, _ = make_env(db, DeploymentEnvironment.DEV, "legacy_inventory_sync")
+    workflow = automation_service.create_workflow(
+        db,
+        actor=admin,
+        name="Trigger retry",
+        graph={"nodes": [{"id": "trigger", "type": "trigger.manual", "config": {}}], "edges": []},
+    )
+    first_run = WorkflowRun(
+        id=uuid.uuid4(),
+        workflow_id=workflow.id,
+        workflow_version=workflow.version,
+        graph=workflow.graph,
+        status=RunStatus.RUNNING,
+        trigger_event=TriggerEvent.MANUAL.value,
+        dedup_key=f"retry:{uuid.uuid4()}",
+    )
+    second_run = WorkflowRun(
+        id=uuid.uuid4(),
+        workflow_id=workflow.id,
+        workflow_version=workflow.version,
+        graph=workflow.graph,
+        status=RunStatus.RUNNING,
+        trigger_event=TriggerEvent.MANUAL.value,
+        dedup_key=f"retry:{uuid.uuid4()}",
+    )
+    db.add_all([first_run, second_run])
+    db.flush()
+    adapter = airflow_service.adapter_for(conn)
+
+    def context(run: WorkflowRun) -> SimpleNamespace:
+        return SimpleNamespace(
+            db=db,
+            run=run,
+            now=partner_clock(),
+            settings=get_settings(),
+            airflow_adapter=lambda _: adapter,
+        )
+
+    first = automation_nodes._trigger_dag_once(
+        context(first_run),
+        node_id="run",
+        conn=conn,
+        dag_id="legacy_inventory_sync",
+        note="first",
+    )
+    partner_clock.advance(seconds=61)
+    retry = automation_nodes._trigger_dag_once(
+        context(first_run),
+        node_id="run",
+        conn=conn,
+        dag_id="legacy_inventory_sync",
+        note="retry",
+    )
+
+    assert first["run_id"] != retry["run_id"]
+    assert len(writes().triggered["legacy_inventory_sync"]) == 2
+    with pytest.raises(automation_nodes.ActionFailed, match="active trigger"):
+        automation_nodes._trigger_dag_once(
+            context(second_run),
+            node_id="run",
+            conn=conn,
+            dag_id="legacy_inventory_sync",
+            note="duplicate",
+        )
+
 
 
 def test_flapping_breaker_pauses_after_approval(

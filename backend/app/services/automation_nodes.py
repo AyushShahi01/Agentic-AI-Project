@@ -585,24 +585,28 @@ def _trigger_dag_once(
         )
     )
     if reservation is not None:
-        if (
-            reservation.workflow_run_id == ctx.run.id
-            and reservation.node_id == node_id
-            and reservation.airflow_run_id
-        ):
-            logger.info(
-                "Skipped duplicate DAG trigger for %s/%s; workflow run %s already started %s",
-                conn.name,
-                dag_id,
-                ctx.run.id,
-                reservation.airflow_run_id,
-            )
-            return {"dag_id": dag_id, "run_id": reservation.airflow_run_id, "deduplicated": True}
         if reservation.airflow_run_id:
             remote = run_async(
                 lambda: ctx.airflow_adapter(conn).get_dag_run(dag_id, reservation.airflow_run_id)
             )
-            if remote is None or remote.state in ACTIVE_RUN_STATES:
+            if remote is not None and remote.state in ACTIVE_RUN_STATES:
+                if (
+                    reservation.workflow_run_id == ctx.run.id
+                    and reservation.node_id == node_id
+                ):
+                    logger.info(
+                        "Skipped duplicate DAG trigger for %s/%s; workflow run %s "
+                        "already started %s",
+                        conn.name,
+                        dag_id,
+                        ctx.run.id,
+                        reservation.airflow_run_id,
+                    )
+                    return {
+                        "dag_id": dag_id,
+                        "run_id": reservation.airflow_run_id,
+                        "deduplicated": True,
+                    }
                 logger.info(
                     "Skipped duplicate DAG trigger for %s/%s; active reservation belongs to %s",
                     conn.name,

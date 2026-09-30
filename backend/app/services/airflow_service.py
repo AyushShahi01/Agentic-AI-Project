@@ -344,7 +344,7 @@ def dag_sync_due(conn: AirflowConnection, now: datetime | None = None) -> bool:
     if not conn.is_active:
         return False
     synced = [dag.last_synced_at for dag in conn.dags if dag.last_synced_at is not None]
-    reference = max(synced, default=None)
+    reference = min(synced, default=None)
     if reference is None:
         return True
     now = now or utcnow()
