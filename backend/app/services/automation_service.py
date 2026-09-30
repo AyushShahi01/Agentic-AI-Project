@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -79,7 +80,7 @@ def seed_templates(db: Session, actor: User | None = None) -> list[Workflow]:
             description=template.description,
             enabled=False,
             mode=WorkflowMode.LIVE,
-            graph=to_raw(validate_graph(template.graph)),
+            graph=to_raw(validate_graph(template.build())),
             created_by=actor.id if actor else None,
         )
         db.add(workflow)
@@ -129,6 +130,29 @@ def _validated(raw: Any) -> dict[str, Any]:
         ) from exc
 
 
+def build_template(
+    template_key: str, parameters: dict[str, Any] | None = None
+) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    template = TEMPLATES_BY_KEY.get(template_key)
+    if template is None:
+        raise NotFoundError(f"Unknown template '{template_key}'")
+    try:
+        values = template.validate_parameters(parameters)
+    except ValidationError as exc:
+        problems = [
+            {"field": ".".join(str(part) for part in error["loc"]), "message": error["msg"]}
+            for error in exc.errors()
+        ]
+        raise BadRequestError(
+            "Template parameters are invalid",
+            code="invalid_template_parameters",
+            status_code=422,
+            details={"problems": problems},
+        ) from exc
+    graph = _validated(template.build(values.model_dump(mode="json")))
+    return template, graph, values.model_dump(mode="json")
+
+
 def create_workflow(
     db: Session,
     *,
@@ -137,15 +161,15 @@ def create_workflow(
     name: str | None = None,
     description: str | None = None,
     graph: dict[str, Any] | None = None,
+    template_parameters: dict[str, Any] | None = None,
     ip_address: str | None = None,
 ) -> Workflow:
+    template = None
+    parameters = None
     if template_key:
-        template = TEMPLATES_BY_KEY.get(template_key)
-        if template is None:
-            raise NotFoundError(f"Unknown template '{template_key}'")
+        template, graph, parameters = build_template(template_key, template_parameters)
         name = name or template.name
         description = description if description is not None else template.description
-        graph = template.graph
     if not name or graph is None:
         raise BadRequestError("Provide a template_key, or a name and a graph")
     workflow = Workflow(
@@ -154,6 +178,9 @@ def create_workflow(
         enabled=False,
         mode=WorkflowMode.LIVE,
         graph=_validated(graph),
+        template_key=template.key if template else None,
+        template_version=template.version if template else None,
+        template_parameters=parameters,
         created_by=actor.id,
     )
     db.add(workflow)

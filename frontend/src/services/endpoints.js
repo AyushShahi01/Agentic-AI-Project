@@ -88,6 +88,8 @@ export const automationApi = {
   summary: () => api.get('/automation/summary'),
   nodeTypes: () => api.get('/automation/node-types'),
   listTemplates: () => api.get('/automation/templates'),
+  previewTemplate: (key, template_parameters) =>
+    api.post(`/automation/templates/${key}/preview`, { template_parameters }),
   listWorkflows: () => api.get('/automation/workflows'),
   getWorkflow: (id) => api.get(`/automation/workflows/${id}`),
   createWorkflow: (data) => api.post('/automation/workflows', data),

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request
 
 from app.automation.graph import catalog
-from app.automation.templates import TEMPLATES
+from app.automation.templates import ALL_TEMPLATES
 from app.automation.types import ApprovalStatus, RunStatus
 from app.core.config import get_settings
 from app.core.dependencies import (
@@ -28,6 +28,7 @@ from app.schemas.automation import (
     MarkedRead,
     NodeTypeRead,
     NotificationRead,
+    TemplatePreview,
     TemplateRead,
     TickSummaryRead,
     WorkflowCreate,
@@ -61,9 +62,32 @@ def node_types(_: ViewerUser) -> list[NodeTypeRead]:
 @router.get("/templates", response_model=list[TemplateRead])
 def templates(_: ViewerUser) -> list[TemplateRead]:
     return [
-        TemplateRead(key=t.key, name=t.name, description=t.description, graph=t.graph)
-        for t in TEMPLATES
+        TemplateRead(
+            key=t.key,
+            name=t.name,
+            description=t.description,
+            version=t.version,
+            graph=t.graph,
+            parameter_schema=t.parameter_schema,
+            supported_trigger_types=list(
+                t.supported_trigger_types
+                or tuple(
+                    node["type"]
+                    for node in (t.graph or {}).get("nodes", [])
+                    if str(node.get("type", "")).startswith("trigger.")
+                )
+            ),
+        )
+        for t in ALL_TEMPLATES
     ]
+
+
+@router.post("/templates/{template_key}/preview", response_model=GraphCheckResult)
+def preview_template(
+    template_key: str, body: TemplatePreview, _: ViewerUser
+) -> GraphCheckResult:
+    _, graph, _ = automation_service.build_template(template_key, body.template_parameters)
+    return GraphCheckResult(valid=True, problems=[], graph=graph)
 
 
 # ---------------------------------------------------------------------- workflows
@@ -85,6 +109,7 @@ def create_workflow(
         name=body.name,
         description=body.description,
         graph=body.graph,
+        template_parameters=body.template_parameters,
         ip_address=ip,
     )
     return _workflow(workflow)

@@ -465,6 +465,9 @@ function Editor() {
   const wrapper = useRef(null)
 
   const [catalog, setCatalog] = useState(null)
+  const [templates, setTemplates] = useState([])
+  const [templateKey, setTemplateKey] = useState('')
+  const [templateParameters, setTemplateParameters] = useState({})
   const [workflow, setWorkflow] = useState(null)
   const [meta, setMeta] = useState({ name: '', description: '' })
   const [nodes, setNodes, onNodesChange] = useNodesState([])
@@ -480,6 +483,7 @@ function Editor() {
   const sources = useSources()
 
   const defs = useMemo(() => Object.fromEntries((catalog ?? []).map((d) => [d.type, d])), [catalog])
+  const selectedTemplate = templates.find((template) => template.key === templateKey)
   // An output linked to several blocks shows their run order on each link ("failed · 2").
   const shownEdges = useMemo(() => {
     const order = linkOrder(nodes, edges)
@@ -493,7 +497,10 @@ function Editor() {
     let cancelled = false
     async function load() {
       try {
-        const types = await automationApi.nodeTypes()
+        const [types, availableTemplates] = await Promise.all([
+          automationApi.nodeTypes(),
+          automationApi.listTemplates(),
+        ])
         const byType = Object.fromEntries(types.map((d) => [d.type, d]))
         let wf = null
         let graph
@@ -503,6 +510,8 @@ function Editor() {
           wf = await automationApi.getWorkflow(id)
           ;({ graph, name } = wf)
           description = wf.description ?? ''
+          setTemplateKey(wf.template_key ?? '')
+          setTemplateParameters(wf.template_parameters ?? {})
         } else if (fromId) {
           const source = await automationApi.getWorkflow(fromId)
           graph = source.graph
@@ -515,6 +524,7 @@ function Editor() {
         if (cancelled) return
         const flow = toFlow(graph, (n) => ({ def: byType[n.type] }))
         setCatalog(types)
+        setTemplates(availableTemplates)
         setWorkflow(wf)
         setMeta({ name, description })
         setNodes(flow.nodes)
@@ -730,11 +740,42 @@ function Editor() {
     }
   }
 
+  async function generateTemplate() {
+    if (!templateKey) return
+    setBusy('template')
+    try {
+      const result = await automationApi.previewTemplate(templateKey, templateParameters)
+      applyProblems(result.problems)
+      if (!result.valid || !result.graph) return
+      const flow = toFlow(result.graph, (n) => ({ def: defs[n.type] }))
+      setNodes(flow.nodes)
+      setEdges(flow.edges)
+      if (meta.name === 'New workflow') {
+        setMeta((current) => ({ ...current, name: selectedTemplate?.name ?? current.name }))
+      }
+      setDirty(true)
+      requestAnimationFrame(() => fitView(FIT_VIEW))
+      toast.success('Template graph generated and validated')
+    } catch (err) {
+      applyProblems(err.details?.problems ?? [])
+      toast.error(err.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function save() {
     if (!meta.name.trim()) return toast.error('Give the workflow a name')
     setBusy('save')
     const graph = fromFlow(nodes, edges)
-    const body = { name: meta.name.trim(), description: meta.description.trim() || null, graph }
+    const body = {
+      name: meta.name.trim(),
+      description: meta.description.trim() || null,
+      graph,
+      ...(isNew && templateKey
+        ? { template_key: templateKey, template_parameters: templateParameters }
+        : {}),
+    }
     try {
       if (isNew) {
         const created = await automationApi.createWorkflow(body)
@@ -821,6 +862,44 @@ function Editor() {
           </Button>
         )}
       </div>
+
+      {isNew && !fromId && (
+        <div className="editor-template-setup">
+          <div className="field">
+            <label htmlFor="workflow-template">Start from a template</label>
+            <select
+              id="workflow-template"
+              value={templateKey}
+              disabled={!canEdit || busy === 'template'}
+              onChange={(event) => {
+                setTemplateKey(event.target.value)
+                setTemplateParameters({})
+              }}
+            >
+              <option value="">Blank workflow</option>
+              {templates.map((template) => (
+                <option key={template.key} value={template.key}>
+                  {template.name} (v{template.version})
+                </option>
+              ))}
+            </select>
+          </div>
+          {selectedTemplate && (
+            <>
+              <p className="muted small">{selectedTemplate.description}</p>
+              <SchemaForm
+                schema={selectedTemplate.parameter_schema}
+                value={templateParameters}
+                disabled={!canEdit || busy === 'template'}
+                onChange={setTemplateParameters}
+              />
+              <Button onClick={generateTemplate} loading={busy === 'template'}>
+                Generate template graph
+              </Button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className={`editor-shell editor-shell-wide ${canEdit ? '' : 'editor-readonly'}`}>
         {canEdit && <Palette

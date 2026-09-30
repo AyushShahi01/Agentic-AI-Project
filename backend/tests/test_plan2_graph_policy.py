@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.automation import policy
 from app.automation.graph import GraphError, catalog, to_raw, validate_graph
 from app.automation.render import render
-from app.automation.templates import TEMPLATES
+from app.automation.templates import ALL_TEMPLATES, TEMPLATES
 from app.models.automation import Workflow
 from app.services import automation_service
 
@@ -36,6 +36,21 @@ def test_every_template_is_valid(template) -> None:  # noqa: ANN001
     assert graph.trigger.type.startswith("trigger.")
     # Round trip is stable (defaults applied once).
     assert to_raw(validate_graph(to_raw(graph))) == to_raw(graph)
+
+
+def test_parameterized_template_builds_a_valid_graph() -> None:
+    template = next(t for t in ALL_TEMPLATES if t.key == "run-verify-dag")
+    graph = validate_graph(
+        template.build({"connection_id": "conn", "dag_id": "orders_pipeline"})
+    )
+    assert graph.trigger.type == "trigger.manual"
+    assert graph.nodes["run"].config["dag_id"] == "orders_pipeline"
+
+
+def test_parameterized_template_rejects_missing_parameters() -> None:
+    template = next(t for t in ALL_TEMPLATES if t.key == "run-verify-dag")
+    with pytest.raises(ValueError):
+        template.build({})
 
 
 def test_defaults_are_applied() -> None:

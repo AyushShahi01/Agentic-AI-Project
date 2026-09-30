@@ -1,7 +1,11 @@
-"""Built-in workflows ("recipes"), seeded disabled on first start."""
+"""Built-in workflows and parameterized workflow templates."""
 
+import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 RETRYABLE_NOW = ["TRANSIENT_NETWORK", "TIMEOUT"]
 RETRY_WITH_APPROVAL = ["RESOURCE", "UPSTREAM_MISSING", "UNKNOWN"]
@@ -13,7 +17,60 @@ class Template:
     key: str
     name: str
     description: str
-    graph: dict[str, Any]
+    graph: dict[str, Any] | None = None
+    version: int = 1
+    parameter_model: type[BaseModel] | None = None
+    builder: Callable[[BaseModel], dict[str, Any]] | None = None
+    supported_trigger_types: tuple[str, ...] = ()
+
+    def validate_parameters(self, parameters: dict[str, Any] | None = None) -> BaseModel:
+        model = self.parameter_model or EmptyParameters
+        return model.model_validate(parameters or {})
+
+    def build(self, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+        values = self.validate_parameters(parameters)
+        if self.builder is not None:
+            return self.builder(values)
+        if self.graph is None:
+            raise ValueError(f"Template '{self.key}' has no graph")
+        return self.graph
+
+    @property
+    def parameter_schema(self) -> dict[str, Any]:
+        return (self.parameter_model or EmptyParameters).model_json_schema()
+
+
+class EmptyParameters(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class RunVerifyDagParameters(BaseModel):
+    connection_id: str = Field(
+        min_length=1,
+        json_schema_extra={"x-label": "Airflow connection", "x-widget": "airflow_connection"},
+    )
+    dag_id: str = Field(
+        min_length=1,
+        max_length=250,
+        json_schema_extra={"x-label": "DAG", "x-widget": "dag"},
+    )
+    parameters: str = Field(
+        default="{}",
+        max_length=10000,
+        json_schema_extra={"x-label": "Run parameters (JSON)", "x-widget": "json"},
+    )
+    timeout_minutes: int = Field(default=60, ge=1, le=1440)
+
+    @field_validator("parameters")
+    @classmethod
+    def _json_object(cls, value: str) -> str:
+        try:
+            parsed = json.loads(value or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Run parameters are not valid JSON: {exc.msg}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Run parameters must be a JSON object")
+        return value or "{}"
 
 
 def _n(node_id: str, node_type: str, name: str | None = None, **config: Any) -> dict[str, Any]:
@@ -25,6 +82,35 @@ def _n(node_id: str, node_type: str, name: str | None = None, **config: Any) -> 
 
 def _e(src: str, port: str, dst: str) -> dict[str, str]:
     return {"from": src, "port": port, "to": dst}
+
+
+def _run_verify_dag_graph(parameters: RunVerifyDagParameters) -> dict[str, Any]:
+    return {
+        "nodes": [
+            _n("trigger", "trigger.manual"),
+            _n(
+                "run",
+                "pipeline.run_dag",
+                connection_id=parameters.connection_id,
+                dag_id=parameters.dag_id,
+                parameters=parameters.parameters,
+                timeout_minutes=parameters.timeout_minutes,
+            ),
+            _n("verify", "verify.run_success", timeout_minutes=parameters.timeout_minutes),
+            _n(
+                "notify",
+                "notify",
+                level="INFO",
+                title="DAG run succeeded: {{workflow.name}}",
+                message=f"{parameters.dag_id} completed successfully.",
+            ),
+        ],
+        "edges": [
+            _e("trigger", "next", "run"),
+            _e("run", "success", "verify"),
+            _e("verify", "success", "notify"),
+        ],
+    }
 
 
 def _retry_graph(categories: list[str], approval_envs: list[str]) -> dict[str, Any]:
@@ -264,4 +350,17 @@ TEMPLATES: tuple[Template, ...] = (
     ),
 )
 
-TEMPLATES_BY_KEY = {t.key: t for t in TEMPLATES}
+RUN_VERIFY_TEMPLATE = Template(
+    key="run-verify-dag",
+    name="Run and verify a DAG",
+    description="Start a selected Airflow DAG, wait for completion, and notify on success.",
+    graph=_run_verify_dag_graph(
+        RunVerifyDagParameters(connection_id="template-connection", dag_id="template-dag")
+    ),
+    parameter_model=RunVerifyDagParameters,
+    builder=_run_verify_dag_graph,
+    supported_trigger_types=("trigger.manual",),
+)
+
+ALL_TEMPLATES: tuple[Template, ...] = (*TEMPLATES, RUN_VERIFY_TEMPLATE)
+TEMPLATES_BY_KEY = {t.key: t for t in ALL_TEMPLATES}

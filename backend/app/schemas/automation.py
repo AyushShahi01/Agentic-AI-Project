@@ -35,7 +35,10 @@ class TemplateRead(BaseModel):
     key: str
     name: str
     description: str
-    graph: dict[str, Any]
+    version: int
+    graph: dict[str, Any] | None
+    parameter_schema: dict[str, Any]
+    supported_trigger_types: list[str]
 
 
 class WorkflowRead(BaseModel):
@@ -43,6 +46,9 @@ class WorkflowRead(BaseModel):
 
     id: uuid.UUID
     key: str | None
+    template_key: str | None
+    template_version: int | None
+    template_parameters: dict[str, Any] | None
     name: str
     description: str | None
     enabled: bool
@@ -60,6 +66,7 @@ class WorkflowCreate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     graph: dict[str, Any] | None = None
+    template_parameters: dict[str, Any] | None = None
 
 
 class WorkflowUpdate(BaseModel):
@@ -72,6 +79,10 @@ class WorkflowUpdate(BaseModel):
 
 class GraphCheck(BaseModel):
     graph: dict[str, Any]
+
+
+class TemplatePreview(BaseModel):
+    template_parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphCheckResult(BaseModel):
