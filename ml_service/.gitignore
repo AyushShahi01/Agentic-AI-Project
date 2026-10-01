@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+# Trained weights are large; versioned dirs live in weights/<version>/ and are mounted, not committed.
+weights/*
+!weights/.gitkeep
+# Exported task logs may contain customer data; the hand-labeled eval set may too.
+data/exported_task_logs.jsonl

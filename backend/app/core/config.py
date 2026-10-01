@@ -81,6 +81,17 @@ class Settings(BaseSettings):
     PUBLIC_APP_URL: str = "http://localhost:5173"
     SMTP_TIMEOUT_SECONDS: float = 10
 
+    # ML failure classifier (aiplan1). Disabled = regex only, exactly as before. The model is
+    # consulted only when regex says UNKNOWN or CODE_BUG, and only overrides it at
+    # >= ML_MIN_CONFIDENCE; below that its answer is stored as a display-only suggestion.
+    ML_SERVICE_ENABLED: bool = False
+    ML_SERVICE_URL: str = "http://127.0.0.1:8001"
+    ML_SERVICE_TOKEN: str = ""
+    ML_SERVICE_TIMEOUT_SECONDS: float = 2
+    ML_MIN_CONFIDENCE: float = 0.85
+    ML_BREAKER_FAILURES: int = 3
+    ML_BREAKER_COOLDOWN_SECONDS: int = 60
+
     @model_validator(mode="after")
     def _check_production_safety(self) -> "Settings":
         if self.ENVIRONMENT == "development":

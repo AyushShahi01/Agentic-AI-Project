@@ -77,6 +77,11 @@ export const incidentsApi = {
   acknowledge: (id) => api.post(`/incidents/${id}/acknowledge`),
   resolve: (id, note) => api.post(`/incidents/${id}/resolve`, { note }),
   reopen: (id) => api.post(`/incidents/${id}/reopen`),
+  setDiagnosis: (id, category, note) => api.put(`/incidents/${id}/diagnosis`, { category, note }),
+}
+
+export const diagnosisApi = {
+  classifyLog: (log) => api.post('/diagnosis/classify', { log }),
 }
 
 export const detectionApi = {

@@ -26,7 +26,13 @@ from app.orchestration.airflow.base import (
     AirflowDagRun,
 )
 from app.orchestration.airflow.factory import run_async
-from app.services import airflow_service, audit_service, automation_service, incident_service
+from app.services import (
+    airflow_service,
+    audit_service,
+    automation_service,
+    diagnosis_service,
+    incident_service,
+)
 from app.services.incident_service import OPEN_STATUSES
 
 logger = logging.getLogger(__name__)
@@ -189,6 +195,9 @@ def _attach(db: Session, incident: Incident, records: list[EvidenceRecord], now:
             "evidence_added",
             details={"sources": [r.source for r in records]},
         )
+    if any(r.kind == EvidenceKind.TASK_LOG and r.content for r in records):
+        # Diagnose once, when the evidence arrives; pages and workflows read the stored result.
+        diagnosis_service.diagnose_and_store(db, incident)
 
 
 # ---------------------------------------------------------------------- per-DAG processing

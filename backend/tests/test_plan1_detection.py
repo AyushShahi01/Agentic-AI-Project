@@ -218,7 +218,7 @@ def test_cycle_opens_incident_with_scrubbed_evidence(db: Session, fake: FakeAirf
     assert kinds == {EvidenceKind.RUN_METADATA, EvidenceKind.TASK_INSTANCE, EvidenceKind.TASK_LOG}
     log = next(e for e in incident.evidence if e.kind == EvidenceKind.TASK_LOG)
     assert "ValueError: bad row" in log.content and "hunter2" not in log.content
-    assert [e.event for e in incident.events] == ["opened", "evidence_added"]
+    assert [e.event for e in incident.events] == ["opened", "evidence_added", "diagnosed"]
     actions = db.scalars(select(AuditLog.action)).all()
     assert "incident.opened" in actions and "detection.cycle" in actions
 

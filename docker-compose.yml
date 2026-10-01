@@ -3,6 +3,7 @@
 #   docker compose up -d postgres                  # PostgreSQL only
 #   docker compose up -d postgres airflow3         # + Airflow 3.x on http://localhost:8080
 #   docker compose --profile airflow2 up -d        # + Airflow 2.x on http://localhost:8081
+#   docker compose --profile ml up -d ml-service   # + GPU log classifier on http://127.0.0.1:8001
 #
 # Airflow credentials (both versions): admin / admin  -- local development only.
 
@@ -59,6 +60,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Optional (aiplan1): needs an NVIDIA GPU + container toolkit. Train first so
+  # ml_service/weights/<version>/ exists; set ML_SERVICE_TOKEN in .env (same value as the backend).
+  ml-service:
+    profiles: ["ml"]
+    build: ./ml_service
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
+    volumes:
+      - ./ml_service/weights:/app/weights:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   postgres-data:

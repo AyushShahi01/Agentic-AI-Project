@@ -11,6 +11,7 @@ import RunList from './pages/automation/RunList'
 import Workflows from './pages/automation/Workflows'
 import Catalog from './pages/connections/Catalog'
 import Dashboard from './pages/dashboard/Dashboard'
+import LogAnalyzer from './pages/diagnosis/LogAnalyzer'
 import IncidentDetail from './pages/incidents/IncidentDetail'
 import IncidentList from './pages/incidents/IncidentList'
 import Users from './pages/settings/Users'
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/automation/workflows" element={<Workflows />} />
           <Route path="/automation/workflows/:id" element={<Lazy><WorkflowEditor /></Lazy>} />
           <Route path="/automation/notifications" element={<Notifications />} />
+          <Route path="/diagnosis/analyzer" element={<LogAnalyzer />} />
           <Route path="/connections" element={<Catalog />} />
           <Route path="/settings/connections" element={<ToCatalog />} />
           <Route path="/settings/dags" element={<ToCatalog />} />

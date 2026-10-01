@@ -96,6 +96,26 @@ class ApprovalConfig(_Config):
         return _recipients(value)
 
 
+class DiagnoseConfig(_Config):
+    min_confidence_pct: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        json_schema_extra=_ui(
+            "Minimum confidence (%)",
+            hint="Below this the outcome is 'unknown'. Operator corrections always pass; "
+            "model scores top out around 90%. Empty = no minimum",
+        ),
+    )
+    refresh: bool = Field(
+        default=False,
+        json_schema_extra=_ui(
+            "Re-check the latest logs",
+            hint="Diagnose again with logs that arrived later (operator corrections are kept)",
+        ),
+    )
+
+
 class ClearTasksConfig(_Config):
     include_downstream: bool = True
 
@@ -398,10 +418,19 @@ NODE_TYPES: dict[str, NodeType] = {
         # ------------------------------------------------------------ incident handling
         NodeType(
             "diagnose.classify_log",
-            "Figure out why",
+            "Diagnose failure",
             "diagnosis",
-            "Reads the failure log and labels the cause (network glitch, bad data, …).",
-            ("next",),
+            "Labels the cause of the failure (network glitch, bad data, …) from the logs, using "
+            "the rules, the AI model and operator corrections, and branches on whether a retry "
+            "may help. 'Any outcome' is used when the outcome's own output is not connected.",
+            ("retryable", "needs_fix", "unknown", "next"),
+            DiagnoseConfig,
+            {
+                "retryable": "retry may help",
+                "needs_fix": "needs a fix",
+                "unknown": "unknown",
+                "next": "any outcome",
+            },
             needs_incident=True,
         ),
         NodeType(

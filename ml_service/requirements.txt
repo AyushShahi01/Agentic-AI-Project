@@ -1,0 +1,15 @@
+# torch is NOT listed: install the CUDA wheel matching your driver first, e.g.
+#   pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+# (the Docker image ships it in the base image).
+transformers==5.18.0
+accelerate==1.15.0
+safetensors==0.8.0
+fastapi==0.142.2
+uvicorn==0.54.0
+pydantic==2.13.5
+numpy==2.5.3
+scikit-learn==1.9.1
+
+# tests
+pytest==9.1.1
+httpx==0.28.1

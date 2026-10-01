@@ -101,7 +101,7 @@ def test_end_to_end_mock_flow(
     detail = client.get(f"/api/v1/incidents/{failed['id']}", headers=viewer_headers).json()
     log = next(e for e in detail["evidence"] if e["kind"] == "TASK_LOG")
     assert "UniqueViolation" in log["content"] and "hunter2" not in log["content"]
-    assert [e["event"] for e in detail["events"]] == ["opened", "evidence_added"]
+    assert [e["event"] for e in detail["events"]] == ["opened", "evidence_added", "diagnosed"]
 
     summary_counts = client.get("/api/v1/incidents/summary", headers=viewer_headers).json()
     assert summary_counts["open_total"] == 2

@@ -7,6 +7,7 @@ from app.core.dependencies import ClientIp, DbSession, OperatorUser, PageParams,
 from app.detection.types import IncidentSeverity, IncidentStatus, IncidentType
 from app.schemas.common import Page
 from app.schemas.incident import (
+    DiagnosisOverride,
     DiagnosisRead,
     IncidentDetail,
     IncidentRead,
@@ -14,17 +15,21 @@ from app.schemas.incident import (
     OpenCount,
     ResolveRequest,
 )
-from app.services import incident_service
+from app.services import diagnosis_service, incident_service
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
 def _detail(db: DbSession, incident_id: uuid.UUID) -> IncidentDetail:
+    # Stored at detection time; never calls the model here (old incidents: regex backfill,
+    # done before the timeline is loaded so its 'diagnosed' event shows up).
+    diagnosis = diagnosis_service.stored_or_backfill(
+        db, incident_service.get_incident(db, incident_id)
+    )
     incident = incident_service.get_incident(db, incident_id, with_details=True)
     detail = IncidentDetail.model_validate(incident)
-    if incident.type == IncidentType.DAG_RUN_FAILED:
-        diagnosis = incident_service.diagnose(incident)
-        detail.diagnosis = DiagnosisRead(**diagnosis.as_dict())
+    if diagnosis is not None:
+        detail.diagnosis = DiagnosisRead.model_validate(diagnosis)
     return detail
 
 
@@ -99,4 +104,20 @@ def reopen(
     incident_id: uuid.UUID, db: DbSession, operator: OperatorUser, ip: ClientIp
 ) -> IncidentDetail:
     incident_service.reopen(db, incident_id, actor=operator, ip_address=ip)
+    return _detail(db, incident_id)
+
+
+@router.put("/{incident_id}/diagnosis", response_model=IncidentDetail)
+def correct_diagnosis(
+    incident_id: uuid.UUID,
+    body: DiagnosisOverride,
+    db: DbSession,
+    operator: OperatorUser,
+    ip: ClientIp,
+) -> IncidentDetail:
+    """Operator correction: wins over regex/model and is never overwritten by re-diagnosis."""
+    note = body.note.strip() if body.note else None
+    diagnosis_service.set_override(
+        db, incident_id, body.category, note or None, actor=operator, ip_address=ip
+    )
     return _detail(db, incident_id)
