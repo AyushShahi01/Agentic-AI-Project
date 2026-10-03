@@ -11,7 +11,7 @@ export const NODE_LABELS = {
   'database.check': 'Check data',
   'flow.wait': 'Wait',
   'condition.filter': 'Only if…',
-  'diagnose.classify_log': 'Figure out why',
+  'diagnose.classify_log': 'Diagnose failure',
   'check.dag_state': 'Check the DAG',
   'approval.request': 'Ask a human',
   'action.clear_failed_tasks': 'Retry failed tasks',

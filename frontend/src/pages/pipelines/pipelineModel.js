@@ -60,7 +60,8 @@ export function workflowFeeds(workflow) {
       if (node.config?.environments?.length) envs = new Set(node.config.environments)
       current = edges[`${node.id}:true`]
     } else if (node.type === 'diagnose.classify_log') {
-      current = edges[`${node.id}:next`]
+      // 'any outcome' if wired, else the first connected outcome output.
+      current = ['next', 'retryable', 'needs_fix', 'unknown'].map((p) => edges[`${node.id}:${p}`]).find(Boolean)
     } else {
       break
     }

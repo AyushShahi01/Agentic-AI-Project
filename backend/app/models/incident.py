@@ -69,6 +69,8 @@ class Incident(TimestampMixin, Base):
         _enum(IncidentResolution, "incident_resolution")
     )
     resolution_note: Mapped[str | None] = mapped_column(Text)
+    # Stored diagnosis (regex / model / operator); see app.services.diagnosis_service.
+    diagnosis: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     evidence: Mapped[list["IncidentEvidence"]] = relationship(
         back_populates="incident",

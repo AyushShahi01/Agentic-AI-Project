@@ -1479,3 +1479,77 @@ input.sla-input {
 .timeline-diagnosed::before {
   background: var(--accent);
 }
+
+/* Diagnosis (aiplan1): model score bars, suggestion, log analyzer */
+.score-bars {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.score-bars li {
+  display: grid;
+  grid-template-columns: minmax(8rem, 14rem) 1fr 3rem;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.score-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--neutral-soft);
+  overflow: hidden;
+}
+
+.score-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--text-muted);
+}
+
+.score-bar-top .score-fill {
+  background: var(--accent);
+}
+
+.score-bar-top .score-label {
+  font-weight: 600;
+}
+
+.score-value {
+  text-align: right;
+}
+
+.diagnosis-suggestion {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: var(--warning-soft);
+}
+
+.diagnosis-details {
+  margin-top: 0.6rem;
+}
+
+.diagnosis-details summary {
+  cursor: pointer;
+}
+
+.analyzer-input {
+  width: 100%;
+  font-size: 0.8rem;
+  resize: vertical;
+}
+
+@media (max-width: 640px) {
+  .score-bars li {
+    grid-template-columns: 1fr 3rem;
+  }
+
+  .score-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

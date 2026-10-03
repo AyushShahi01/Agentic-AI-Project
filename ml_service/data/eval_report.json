@@ -1,0 +1,1328 @@
+{
+  "eval_size": 155,
+  "threshold": 0.85,
+  "regex_accuracy": 0.3742,
+  "model_accuracy": 0.8323,
+  "hybrid_accuracy": 0.7677,
+  "regex_weak_logs": 113,
+  "regex_weak_correct_regex": 23,
+  "regex_weak_correct_hybrid": 84,
+  "regex_unknown_total": 81,
+  "regex_unknown_correct_hybrid": 61,
+  "model_overrides": 72,
+  "override_precision": 0.9306,
+  "sweep": [
+    {
+      "threshold": 0.5,
+      "hybrid_accuracy": 0.8065,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 64,
+      "regex_unknown_rate": 0.7901,
+      "model_overrides": 98,
+      "override_precision": 0.8163
+    },
+    {
+      "threshold": 0.6,
+      "hybrid_accuracy": 0.8065,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 64,
+      "regex_unknown_rate": 0.7901,
+      "model_overrides": 95,
+      "override_precision": 0.8316
+    },
+    {
+      "threshold": 0.7,
+      "hybrid_accuracy": 0.8,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 64,
+      "regex_unknown_rate": 0.7901,
+      "model_overrides": 90,
+      "override_precision": 0.8556
+    },
+    {
+      "threshold": 0.8,
+      "hybrid_accuracy": 0.8,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 65,
+      "regex_unknown_rate": 0.8025,
+      "model_overrides": 82,
+      "override_precision": 0.9024
+    },
+    {
+      "threshold": 0.85,
+      "hybrid_accuracy": 0.7677,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 61,
+      "regex_unknown_rate": 0.7531,
+      "model_overrides": 72,
+      "override_precision": 0.9306
+    },
+    {
+      "threshold": 0.9,
+      "hybrid_accuracy": 0.3742,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 11,
+      "regex_unknown_rate": 0.1358,
+      "model_overrides": 0,
+      "override_precision": null
+    },
+    {
+      "threshold": 0.95,
+      "hybrid_accuracy": 0.3742,
+      "regex_unknown_total": 81,
+      "regex_unknown_correct": 11,
+      "regex_unknown_rate": 0.1358,
+      "model_overrides": 0,
+      "override_precision": null
+    }
+  ],
+  "gate": {
+    "a_hybrid_accuracy_ge_regex": true,
+    "b_regex_unknown_correct_ge_50pct": true,
+    "c_override_precision_ge_0_9": true,
+    "go": true
+  },
+  "model_version": "20261001-0630",
+  "rows": [
+    {
+      "id": "curated-000",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8848,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-001",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8835,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-002",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8477,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-003",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.254,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-004",
+      "label": "AUTH",
+      "regex": "CODE_BUG",
+      "model": "AUTH",
+      "model_confidence": 0.8818,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-005",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.6734,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-006",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.7355,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-007",
+      "label": "AUTH",
+      "regex": "CODE_BUG",
+      "model": "AUTH",
+      "model_confidence": 0.6514,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-008",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8831,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-009",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8235,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-010",
+      "label": "AUTH",
+      "regex": "AUTH",
+      "model": "AUTH",
+      "model_confidence": 0.8866,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-011",
+      "label": "AUTH",
+      "regex": "AUTH",
+      "model": "AUTH",
+      "model_confidence": 0.8861,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-012",
+      "label": "AUTH",
+      "regex": "AUTH",
+      "model": "AUTH",
+      "model_confidence": 0.8744,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-013",
+      "label": "AUTH",
+      "regex": "AUTH",
+      "model": "AUTH",
+      "model_confidence": 0.885,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-014",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.4092,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-015",
+      "label": "AUTH",
+      "regex": "AUTH",
+      "model": "AUTH",
+      "model_confidence": 0.8852,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-016",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8879,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-017",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8792,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-018",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8851,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-019",
+      "label": "AUTH",
+      "regex": "AUTH",
+      "model": "AUTH",
+      "model_confidence": 0.8826,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-020",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.6176,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-021",
+      "label": "DATA_INTEGRITY",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.7156,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-022",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8889,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-023",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8824,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-024",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8938,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-025",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8814,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-026",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8844,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-027",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8139,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-028",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8695,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-029",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8943,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-030",
+      "label": "DATA_INTEGRITY",
+      "regex": "CODE_BUG",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8792,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-031",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8813,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-032",
+      "label": "DATA_INTEGRITY",
+      "regex": "DATA_INTEGRITY",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8879,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-033",
+      "label": "DATA_INTEGRITY",
+      "regex": "DATA_INTEGRITY",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8777,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-034",
+      "label": "DATA_INTEGRITY",
+      "regex": "CODE_BUG",
+      "model": "SCHEMA",
+      "model_confidence": 0.8653,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-035",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8894,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-036",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8383,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-037",
+      "label": "DATA_INTEGRITY",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8802,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-038",
+      "label": "SCHEMA",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8881,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-039",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8848,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-040",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8895,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-041",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8844,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-042",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8881,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-043",
+      "label": "SCHEMA",
+      "regex": "CODE_BUG",
+      "model": "SCHEMA",
+      "model_confidence": 0.8765,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-044",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8803,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-045",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8877,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-046",
+      "label": "SCHEMA",
+      "regex": "SCHEMA",
+      "model": "SCHEMA",
+      "model_confidence": 0.8745,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-047",
+      "label": "SCHEMA",
+      "regex": "SCHEMA",
+      "model": "SCHEMA",
+      "model_confidence": 0.8823,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-048",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.8887,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-049",
+      "label": "SCHEMA",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "SCHEMA",
+      "model_confidence": 0.6587,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-050",
+      "label": "SCHEMA",
+      "regex": "SCHEMA",
+      "model": "SCHEMA",
+      "model_confidence": 0.8807,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-051",
+      "label": "SCHEMA",
+      "regex": "UNKNOWN",
+      "model": "SCHEMA",
+      "model_confidence": 0.867,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-052",
+      "label": "SCHEMA",
+      "regex": "CODE_BUG",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.6537,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-053",
+      "label": "SCHEMA",
+      "regex": "SCHEMA",
+      "model": "SCHEMA",
+      "model_confidence": 0.852,
+      "hybrid": "SCHEMA"
+    },
+    {
+      "id": "curated-054",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8683,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-055",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8879,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-056",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.886,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-057",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8808,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-058",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.4554,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-059",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.6916,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-060",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8889,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-061",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.5503,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-062",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.89,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-063",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8769,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-064",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.876,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-065",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8843,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-066",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8816,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-067",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8448,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-068",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8804,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-069",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.3785,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-070",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.4268,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-071",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.7995,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-072",
+      "label": "CODE_BUG",
+      "regex": "CODE_BUG",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.4317,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-073",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.896,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-074",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.8963,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-075",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.8973,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-076",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.8934,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-077",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.8936,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-078",
+      "label": "RESOURCE",
+      "regex": "RESOURCE",
+      "model": "RESOURCE",
+      "model_confidence": 0.8962,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-079",
+      "label": "RESOURCE",
+      "regex": "RESOURCE",
+      "model": "RESOURCE",
+      "model_confidence": 0.8922,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-080",
+      "label": "RESOURCE",
+      "regex": "RESOURCE",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.5726,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-081",
+      "label": "RESOURCE",
+      "regex": "RESOURCE",
+      "model": "RESOURCE",
+      "model_confidence": 0.895,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-082",
+      "label": "RESOURCE",
+      "regex": "RESOURCE",
+      "model": "RESOURCE",
+      "model_confidence": 0.8965,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-083",
+      "label": "RESOURCE",
+      "regex": "RESOURCE",
+      "model": "RESOURCE",
+      "model_confidence": 0.8941,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-084",
+      "label": "RESOURCE",
+      "regex": "CODE_BUG",
+      "model": "RESOURCE",
+      "model_confidence": 0.8681,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-085",
+      "label": "RESOURCE",
+      "regex": "AUTH",
+      "model": "RESOURCE",
+      "model_confidence": 0.8935,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-086",
+      "label": "RESOURCE",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "RESOURCE",
+      "model_confidence": 0.8934,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-087",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.8986,
+      "hybrid": "RESOURCE"
+    },
+    {
+      "id": "curated-088",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "RESOURCE",
+      "model_confidence": 0.5879,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-089",
+      "label": "TIMEOUT",
+      "regex": "UNKNOWN",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8893,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-090",
+      "label": "TIMEOUT",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TIMEOUT",
+      "model_confidence": 0.6084,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-091",
+      "label": "TIMEOUT",
+      "regex": "CODE_BUG",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8843,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-092",
+      "label": "TIMEOUT",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8857,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-093",
+      "label": "TIMEOUT",
+      "regex": "UNKNOWN",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8851,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-094",
+      "label": "TIMEOUT",
+      "regex": "TIMEOUT",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8842,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-095",
+      "label": "TIMEOUT",
+      "regex": "TIMEOUT",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8862,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-096",
+      "label": "TIMEOUT",
+      "regex": "TIMEOUT",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8839,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-097",
+      "label": "TIMEOUT",
+      "regex": "TIMEOUT",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8853,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-098",
+      "label": "TIMEOUT",
+      "regex": "CODE_BUG",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8829,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-099",
+      "label": "TIMEOUT",
+      "regex": "TIMEOUT",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8823,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-100",
+      "label": "TIMEOUT",
+      "regex": "UNKNOWN",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8865,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-101",
+      "label": "TIMEOUT",
+      "regex": "UNKNOWN",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8786,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-102",
+      "label": "TIMEOUT",
+      "regex": "CODE_BUG",
+      "model": "TIMEOUT",
+      "model_confidence": 0.3883,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-103",
+      "label": "TIMEOUT",
+      "regex": "TIMEOUT",
+      "model": "TIMEOUT",
+      "model_confidence": 0.8797,
+      "hybrid": "TIMEOUT"
+    },
+    {
+      "id": "curated-104",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8462,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-105",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "CODE_BUG",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8205,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-106",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.881,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-107",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8818,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-108",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8225,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-109",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8753,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-110",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8779,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-111",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.883,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-112",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8321,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-113",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8853,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-114",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8599,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-115",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8864,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-116",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8882,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-117",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "CODE_BUG",
+      "model": "CODE_BUG",
+      "model_confidence": 0.7925,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-118",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8896,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-119",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8782,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-120",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "CODE_BUG",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8767,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-121",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8821,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-122",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UPSTREAM_MISSING",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8919,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-123",
+      "label": "UPSTREAM_MISSING",
+      "regex": "CODE_BUG",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8798,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-124",
+      "label": "UPSTREAM_MISSING",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8573,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-125",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8849,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-126",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.89,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-127",
+      "label": "UPSTREAM_MISSING",
+      "regex": "CODE_BUG",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8604,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-128",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8788,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-129",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.4134,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-130",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UPSTREAM_MISSING",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8113,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-131",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UPSTREAM_MISSING",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.896,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-132",
+      "label": "UPSTREAM_MISSING",
+      "regex": "CODE_BUG",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8558,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-133",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8762,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-134",
+      "label": "UPSTREAM_MISSING",
+      "regex": "CODE_BUG",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8836,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-135",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.877,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-136",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.7771,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-137",
+      "label": "UNKNOWN",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "UNKNOWN",
+      "model_confidence": 0.8519,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-138",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.4141,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-139",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.5254,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-140",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.7847,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-141",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.8544,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-142",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "UNKNOWN",
+      "model_confidence": 0.8288,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-143",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.344,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-144",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "UNKNOWN",
+      "model_confidence": 0.6786,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-145",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8287,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-146",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "UNKNOWN",
+      "model_confidence": 0.5768,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-147",
+      "label": "AUTH",
+      "regex": "UNKNOWN",
+      "model": "AUTH",
+      "model_confidence": 0.8867,
+      "hybrid": "AUTH"
+    },
+    {
+      "id": "curated-148",
+      "label": "CODE_BUG",
+      "regex": "UNKNOWN",
+      "model": "UPSTREAM_MISSING",
+      "model_confidence": 0.8956,
+      "hybrid": "UPSTREAM_MISSING"
+    },
+    {
+      "id": "curated-149",
+      "label": "UPSTREAM_MISSING",
+      "regex": "UNKNOWN",
+      "model": "CODE_BUG",
+      "model_confidence": 0.7697,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "curated-150",
+      "label": "TRANSIENT_NETWORK",
+      "regex": "TRANSIENT_NETWORK",
+      "model": "TRANSIENT_NETWORK",
+      "model_confidence": 0.8813,
+      "hybrid": "TRANSIENT_NETWORK"
+    },
+    {
+      "id": "curated-151",
+      "label": "DATA_INTEGRITY",
+      "regex": "DATA_INTEGRITY",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.8872,
+      "hybrid": "DATA_INTEGRITY"
+    },
+    {
+      "id": "curated-152",
+      "label": "SCHEMA",
+      "regex": "CODE_BUG",
+      "model": "SCHEMA",
+      "model_confidence": 0.7521,
+      "hybrid": "CODE_BUG"
+    },
+    {
+      "id": "curated-153",
+      "label": "RESOURCE",
+      "regex": "UNKNOWN",
+      "model": "DATA_INTEGRITY",
+      "model_confidence": 0.4269,
+      "hybrid": "UNKNOWN"
+    },
+    {
+      "id": "exported-ab484c38-2dee-4682-b8e5-a96feca624a5",
+      "label": "UNKNOWN",
+      "regex": "UNKNOWN",
+      "model": "UNKNOWN",
+      "model_confidence": 0.7756,
+      "hybrid": "UNKNOWN"
+    }
+  ]
+}

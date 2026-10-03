@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -60,6 +60,17 @@ class IncidentEventRead(BaseModel):
     created_at: datetime
 
 
+class ScoredCategory(BaseModel):
+    category: str
+    score: float
+
+
+class DiagnosisSuggestion(BaseModel):
+    category: str
+    label: str | None = None
+    confidence: float
+
+
 class DiagnosisRead(BaseModel):
     category: str
     label: str
@@ -67,6 +78,43 @@ class DiagnosisRead(BaseModel):
     confidence: float
     rule: str | None
     matched_line: str | None
+    source: Literal["regex", "model", "operator"] = "regex"
+    model_version: str | None = None
+    top_predictions: list[ScoredCategory] = []
+    suggestion: DiagnosisSuggestion | None = None  # low-confidence model answer; display only
+    ml_status: Literal["used", "skipped", "unavailable", "disabled"] | None = None
+    diagnosed_at: datetime | None = None
+    note: str | None = None  # operator corrections
+    corrected_by: str | None = None
+    previous: dict[str, Any] | None = None
+
+
+class DiagnosisOverride(BaseModel):
+    category: str = Field(min_length=1, max_length=32)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ClassifyLogRequest(BaseModel):
+    log: str = Field(min_length=1)
+
+
+class ModelOutput(BaseModel):
+    category: str
+    confidence: float
+    top_predictions: list[ScoredCategory]
+    model_version: str | None
+    signal_line: str | None
+    device: str | None = None
+    inference_ms: float | None = None
+
+
+class ClassifyLogResponse(BaseModel):
+    regex: DiagnosisRead  # regex alone
+    model: ModelOutput | None  # raw model answer (None if disabled/unavailable)
+    final: DiagnosisRead  # what the hybrid rule would store
+    ml_status: str
+    threshold: float
+    window: str | None  # the preprocessed text the model actually saw
 
 
 class IncidentDetail(IncidentRead):

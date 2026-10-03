@@ -32,6 +32,7 @@ from app.detection.types import (
     IncidentSeverity,
     IncidentStatus,
 )
+from app.diagnosis.log_classifier import RETRYABLE, FailureCategory
 from app.models.airflow import AirflowConnection, AirflowTriggerReservation, MonitoredDag
 from app.models.automation import Approval, Notification, WorkflowRun, WorkflowStep
 from app.models.database_connection import DatabaseConnection
@@ -48,6 +49,7 @@ from app.services import (
     airflow_service,
     audit_service,
     database_connection_service,
+    diagnosis_service,
     incident_service,
     notification_channel_service,
 )
@@ -282,17 +284,59 @@ def _filter(ctx: NodeContext, node: Node) -> NodeResult:
     return NodeResult("true" if matched else "false", {"passed": checks, "failed": failed}, message)
 
 
+_OUTCOME_LABELS = {"retryable": "retry may help", "needs_fix": "needs a fix", "unknown": "unknown"}
+
+
+def diagnosis_outcome(diagnosis: dict[str, Any], min_confidence_pct: int | None) -> str:
+    """retryable / needs_fix / unknown. Operator corrections always pass the minimum."""
+    category = str(diagnosis.get("category"))
+    if category == FailureCategory.UNKNOWN:
+        return "unknown"
+    if (
+        min_confidence_pct is not None
+        and diagnosis.get("source") != "operator"
+        and float(diagnosis.get("confidence") or 0) * 100 < min_confidence_pct
+    ):
+        return "unknown"
+    return "retryable" if category in RETRYABLE else "needs_fix"
+
+
 def _classify(ctx: NodeContext, node: Node) -> NodeResult:
-    diagnosis = incident_service.diagnose(ctx.the_incident).as_dict()
+    # The stored diagnosis (computed when evidence arrived, or an operator correction), so the
+    # workflow and the incident page always agree; computed here only if it is missing, or
+    # recomputed from the latest logs when the block asks for it.
+    cfg = node.config
+    incident = ctx.the_incident
+    if cfg.get("refresh"):
+        stored = diagnosis_service.diagnose_and_store(ctx.db, incident, record_event=False)
+    else:
+        stored = diagnosis_service.ensure(ctx.db, incident, record_event=False)
+    # Only failed-run incidents store one; others (SLA) are classified on the fly as before.
+    diagnosis = dict(stored) if stored else incident_service.diagnose(incident).as_dict()
+    outcome = diagnosis_outcome(diagnosis, cfg.get("min_confidence_pct"))
+    diagnosis["outcome"] = outcome
     ctx.set_context("diagnosis", diagnosis)
     ctx.event(
         "diagnosed",
         category=diagnosis["category"],
         label=diagnosis["label"],
         retryable=diagnosis["retryable"],
-        matched_line=diagnosis["matched_line"],
+        matched_line=diagnosis.get("matched_line"),
+        source=diagnosis.get("source", "regex"),
+        model_version=diagnosis.get("model_version"),
+        outcome=outcome,
     )
-    return NodeResult("next", diagnosis, f"Diagnosis: {diagnosis['label']}")
+    source = diagnosis.get("source", "regex")
+    if source == "model" and diagnosis.get("model_version"):
+        source = f"model {diagnosis['model_version']}"
+    message = (
+        f"Diagnosis: {diagnosis['label']} ({source}, {round(diagnosis['confidence'] * 100)}%)"
+        f" → {_OUTCOME_LABELS[outcome]}"
+    )
+    # Graphs that only wire 'any outcome' (all graphs made before the outcome outputs) keep
+    # following it.
+    port = outcome if ctx.graph.next_nodes(node.id, outcome) else "next"
+    return NodeResult(port, diagnosis, message)
 
 
 def _dag_state(ctx: NodeContext, node: Node) -> NodeResult:

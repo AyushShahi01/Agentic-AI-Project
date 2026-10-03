@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useOutletContext, useParams } from 'react-router'
-import { Alert, Badge, Button, Card, EmptyState, Field, Modal } from '../../components/ui'
+import DiagnosisCard from '../../components/diagnosis/DiagnosisCard'
+import { Alert, Button, Card, EmptyState, Field, Modal } from '../../components/ui'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
 import { formatDateTime, formatRelative } from '../../format'
@@ -21,6 +22,7 @@ const EVENT_LABELS = {
   automation_started: 'Automation started',
   automation_finished: 'Automation finished',
   diagnosed: 'Diagnosed',
+  diagnosis_corrected: 'Diagnosis corrected',
   approval_requested: 'Approval requested',
   approved: 'Approved',
   rejected: 'Rejected',
@@ -198,7 +200,13 @@ function AutomationEventDetails({ event: e }) {
   const d = e.details ?? {}
   const lines = []
   if (d.workflow && e.event.startsWith('automation_')) lines.push(d.workflow)
-  if (e.event === 'diagnosed') lines.push(d.label)
+  if (e.event === 'diagnosed') {
+    const source = d.source === 'model' ? `model${d.model_version ? ` ${d.model_version}` : ''}` : d.source
+    lines.push([d.label ?? d.category, source && `via ${source}`, d.backfill && 'backfilled'].filter(Boolean).join(' '))
+  }
+  if (e.event === 'diagnosis_corrected') {
+    lines.push(`${d.previous_category ?? '?'} → ${d.category}`)
+  }
   if (d.action) lines.push(d.action)
   if (d.reasons) lines.push(d.reasons.join('; '))
   if (d.error) lines.push(d.error)
@@ -219,29 +227,6 @@ function AutomationEventDetails({ event: e }) {
         </>
       )}
     </div>
-  )
-}
-
-function DiagnosisCard({ diagnosis }) {
-  return (
-    <Card title="Diagnosis">
-      <div className="cell-title">
-        <strong>{diagnosis.label}</strong>
-        <Badge tone={diagnosis.retryable ? 'success' : 'warning'}>
-          {diagnosis.retryable ? 'a retry may help' : 'a retry will not help'}
-        </Badge>
-        {diagnosis.confidence > 0 && (
-          <span className="muted small">{Math.round(diagnosis.confidence * 100)}% confidence</span>
-        )}
-      </div>
-      {diagnosis.matched_line ? (
-        <pre className="log-viewer log-inline">{diagnosis.matched_line}</pre>
-      ) : (
-        <p className="muted small">
-          {diagnosis.rule === 'no_log' ? 'No failure log was available.' : 'No known error pattern matched the log.'}
-        </p>
-      )}
-    </Card>
   )
 }
 
@@ -458,7 +443,16 @@ export default function IncidentDetail() {
         </dl>
       </Card>
 
-      {incident.diagnosis && <DiagnosisCard diagnosis={incident.diagnosis} />}
+      {incident.diagnosis && (
+        <DiagnosisCard
+          diagnosis={incident.diagnosis}
+          canCorrect={canOperate}
+          onCorrect={async (category, note) => {
+            setIncident(await incidentsApi.setDiagnosis(incident.id, category, note))
+            toast.success('Diagnosis corrected')
+          }}
+        />
+      )}
       <AutomationCard
         incidentId={incident.id}
         reloadKey={reloadKey}
