@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from app.orchestration.airflow.base import (
 from app.orchestration.airflow.factory import build_adapter, run_async
 from app.schemas.airflow import AirflowConnCreate, AirflowConnTestRequest, AirflowConnUpdate
 from app.services import audit_service
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -335,6 +338,26 @@ def mark_healthy(conn: AirflowConnection, latency_ms: int | None, when: datetime
     conn.last_checked_at = when
 
 
+def dag_sync_due(conn: AirflowConnection, now: datetime | None = None) -> bool:
+    """Return whether the monitor needs a fresh DAG list for this connection."""
+    settings = get_settings()
+    if not conn.is_active:
+        return False
+    synced = [dag.last_synced_at for dag in conn.dags if dag.last_synced_at is not None]
+    reference = min(synced, default=None)
+    if reference is None:
+        return True
+    now = now or utcnow()
+    due = (now - reference).total_seconds() >= settings.AIRFLOW_DAG_SYNC_MIN_INTERVAL_SECONDS
+    if not due:
+        logger.debug(
+            "Skipped Airflow DAG sync for %s; last sync was %.1fs ago",
+            conn.name,
+            (now - reference).total_seconds(),
+        )
+    return due
+
+
 def check_saved_connection(
     db: Session, connection_id: uuid.UUID, *, actor: User, ip_address: str | None
 ) -> ProbeOutcome:
@@ -367,6 +390,7 @@ def sync_dags(
     adapter = adapter_for(conn)
     now = utcnow()
     started = time.perf_counter()
+    logger.debug("Starting Airflow DAG sync for %s", conn.name)
     try:
         remote_dags = run_async(adapter.list_dags)
     except AirflowAdapterError as exc:

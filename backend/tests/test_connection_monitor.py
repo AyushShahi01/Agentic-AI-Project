@@ -14,7 +14,7 @@ from app.db.base import utcnow
 from app.models.airflow import AirflowConnection, MonitoredDag
 from app.models.audit_log import AuditLog
 from app.orchestration.airflow import factory
-from app.services import connection_monitor_service
+from app.services import airflow_service, connection_monitor_service
 from tests.fake_airflow import FakeAirflow
 
 CONNS = "/api/v1/airflow/connections"
@@ -92,6 +92,39 @@ def test_cycle_refreshes_dags_and_marks_healthy(
     db.expire_all()
     present = {d.dag_id: d.is_present for d in db.scalars(select(MonitoredDag))}
     assert present == {"etl_a": True, "etl_b": False}
+
+
+def test_cycle_skips_fresh_dag_sync(
+    db: Session, airflow: Switchable, conn_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection_monitor_service.run_cycle(db)
+    monkeypatch.setattr(get_settings(), "AIRFLOW_DAG_SYNC_MIN_INTERVAL_SECONDS", 3600)
+    airflow.server.dags = []
+
+    summary = connection_monitor_service.run_cycle(db)
+
+    assert summary.skipped == 1
+    assert {d.dag_id for d in db.scalars(select(MonitoredDag)).all()} == {"etl_a", "etl_b"}
+
+
+def test_cycle_refreshes_when_one_dag_is_stale(
+    db: Session, airflow: Switchable, conn_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection_monitor_service.run_cycle(db)
+    monkeypatch.setattr(get_settings(), "AIRFLOW_DAG_SYNC_MIN_INTERVAL_SECONDS", 3600)
+    conn = _conn(db, conn_id)
+    now = utcnow()
+    dags = {dag.dag_id: dag for dag in conn.dags}
+    dags["etl_a"].last_synced_at = now - timedelta(hours=2)
+    dags["etl_b"].last_synced_at = now
+    db.commit()
+
+    assert airflow_service.dag_sync_due(conn, now) is True
+    airflow.server.dags = []
+    summary = connection_monitor_service.run_cycle(db)
+
+    assert summary.skipped == 0
+    assert all(not dag.is_present for dag in db.scalars(select(MonitoredDag)).all())
 
 
 def test_outage_and_recovery_are_detected_and_audited_once(

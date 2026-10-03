@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.automation import policy
@@ -32,7 +33,7 @@ from app.detection.types import (
     IncidentStatus,
 )
 from app.diagnosis.log_classifier import RETRYABLE, FailureCategory
-from app.models.airflow import AirflowConnection, MonitoredDag
+from app.models.airflow import AirflowConnection, AirflowTriggerReservation, MonitoredDag
 from app.models.automation import Approval, Notification, WorkflowRun, WorkflowStep
 from app.models.database_connection import DatabaseConnection
 from app.models.incident import Incident
@@ -87,6 +88,7 @@ class NodeContext:
     settings: Settings
     _adapter: AirflowAdapter | None = None
     _adapters: dict[uuid.UUID, AirflowAdapter] = field(default_factory=dict)
+    _dag_state_cache: dict[tuple[uuid.UUID, str], NodeResult] = field(default_factory=dict)
 
     @property
     def the_incident(self) -> Incident:
@@ -339,12 +341,20 @@ def _classify(ctx: NodeContext, node: Node) -> NodeResult:
 
 def _dag_state(ctx: NodeContext, node: Node) -> NodeResult:
     dag_id = ctx.the_incident.dag_id
+    cache_key = (ctx.the_incident.connection_id, dag_id)
+    cached = ctx._dag_state_cache.get(cache_key)
+    if cached is not None:
+        logger.debug("Reused cached DAG state for %s", dag_id)
+        return cached
     try:
         dag = run_async(lambda: ctx.adapter().get_dag(dag_id))
         if dag is None:
             raise NodeError(f"DAG {dag_id} no longer exists in Airflow")
         if dag.is_paused:
-            return NodeResult("paused", {"is_paused": True}, f"{dag_id} is paused")
+            result = NodeResult("paused", {"is_paused": True}, f"{dag_id} is paused")
+            logger.info("Dependency blocked DAG action for %s: DAG is paused", dag_id)
+            ctx._dag_state_cache[cache_key] = result
+            return result
         runs = run_async(
             lambda: ctx.adapter().list_dag_runs(dag_id, since=ctx.now - timedelta(hours=24))
         )
@@ -352,8 +362,14 @@ def _dag_state(ctx: NodeContext, node: Node) -> NodeResult:
         raise NodeError(f"Could not read DAG state: {exc.result.message}") from exc
     active = [r.run_id for r in runs if r.state in ACTIVE_RUN_STATES]
     if active:
-        return NodeResult("busy", {"active_runs": active}, f"A run is already active: {active[0]}")
-    return NodeResult("ready", {"is_paused": False}, f"{dag_id} is idle and not paused")
+        result = NodeResult(
+            "busy", {"active_runs": active}, f"A run is already active: {active[0]}"
+        )
+        logger.info("Dependency blocked DAG action for %s: active run %s", dag_id, active[0])
+    else:
+        result = NodeResult("ready", {"is_paused": False}, f"{dag_id} is idle and not paused")
+    ctx._dag_state_cache[cache_key] = result
+    return result
 
 
 # ---------------------------------------------------------------------- approval
@@ -596,6 +612,109 @@ def _run_action(
     return NodeResult("success", {"policy": decision.as_dict(), **output}, f"Done: {description}")
 
 
+def _trigger_dag_once(
+    ctx: NodeContext,
+    *,
+    node_id: str,
+    conn: AirflowConnection,
+    dag_id: str,
+    note: str,
+    conf: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically reserve a DAG before triggering it, so workers cannot race a duplicate call."""
+    reservation = ctx.db.scalar(
+        select(AirflowTriggerReservation).where(
+            AirflowTriggerReservation.connection_id == conn.id,
+            AirflowTriggerReservation.dag_id == dag_id,
+        )
+    )
+    if reservation is not None:
+        if reservation.airflow_run_id:
+            remote = run_async(
+                lambda: ctx.airflow_adapter(conn).get_dag_run(dag_id, reservation.airflow_run_id)
+            )
+            if remote is not None and remote.state in ACTIVE_RUN_STATES:
+                if (
+                    reservation.workflow_run_id == ctx.run.id
+                    and reservation.node_id == node_id
+                ):
+                    logger.info(
+                        "Skipped duplicate DAG trigger for %s/%s; workflow run %s "
+                        "already started %s",
+                        conn.name,
+                        dag_id,
+                        ctx.run.id,
+                        reservation.airflow_run_id,
+                    )
+                    return {
+                        "dag_id": dag_id,
+                        "run_id": reservation.airflow_run_id,
+                        "deduplicated": True,
+                    }
+                logger.info(
+                    "Skipped duplicate DAG trigger for %s/%s; active reservation belongs to %s",
+                    conn.name,
+                    dag_id,
+                    reservation.workflow_run_id,
+                )
+                raise ActionFailed(f"DAG {dag_id} already has an active trigger")
+            ctx.db.delete(reservation)
+            ctx.db.flush()
+        elif (
+            ctx.now - reservation.created_at
+        ).total_seconds() < ctx.settings.AUTOMATION_TRIGGER_RESERVATION_SECONDS:
+            logger.info(
+                "Skipped duplicate DAG trigger for %s/%s; reservation is pending",
+                conn.name,
+                dag_id,
+            )
+            raise ActionFailed(f"DAG {dag_id} has a trigger reservation pending")
+        else:
+            ctx.db.delete(reservation)
+            ctx.db.flush()
+
+    try:
+        active = run_async(
+            lambda: ctx.airflow_adapter(conn).list_dag_runs(
+                dag_id, since=ctx.now - timedelta(hours=24)
+            )
+        )
+        if any(run.state in ACTIVE_RUN_STATES for run in active):
+            logger.info(
+                "Skipped duplicate DAG trigger for %s/%s; Airflow already has an active run",
+                conn.name,
+                dag_id,
+            )
+            raise ActionFailed(f"DAG {dag_id} already has an active run")
+    except AirflowAdapterError:
+        raise
+
+    reservation = AirflowTriggerReservation(
+        connection_id=conn.id,
+        dag_id=dag_id,
+        workflow_run_id=ctx.run.id,
+        node_id=node_id,
+    )
+    try:
+        with ctx.db.begin_nested():
+            ctx.db.add(reservation)
+            ctx.db.flush()
+    except IntegrityError as exc:
+        logger.info(
+            "Skipped duplicate DAG trigger for %s/%s; another worker reserved it",
+            conn.name,
+            dag_id,
+        )
+        raise ActionFailed(f"DAG {dag_id} trigger was reserved by another worker") from exc
+
+    run = run_async(
+        lambda: ctx.airflow_adapter(conn).trigger_dag_run(dag_id, note=note, conf=conf)
+    )
+    reservation.airflow_run_id = run.run_id
+    ctx.db.flush()
+    return {"dag_id": dag_id, "run_id": run.run_id}
+
+
 def _clear_failed_tasks(ctx: NodeContext, node: Node) -> NodeResult:
     incident = ctx.the_incident
     run_id = incident.last_run_id or incident.run_id
@@ -634,11 +753,16 @@ def _trigger_dag_run(ctx: NodeContext, node: Node) -> NodeResult:
 
     def execute() -> dict[str, Any]:
         note = f"Triggered by automation '{ctx.run.workflow_name}' for incident {incident.id}"
-        run = run_async(lambda: ctx.adapter().trigger_dag_run(dag_id, note=note))
-        ctx.set_context(
-            "action_target", {"dag_id": dag_id, "run_id": run.run_id, "action": "trigger"}
+        result = _trigger_dag_once(
+            ctx, node_id=node.id, conn=ctx.connection, dag_id=dag_id, note=note
         )
-        return {"run_id": run.run_id}
+        ctx.set_context(
+            "action_target", {"dag_id": dag_id, "run_id": result["run_id"], "action": "trigger"}
+        )
+        return {
+            "run_id": result["run_id"],
+            **({"deduplicated": True} if result.get("deduplicated") else {}),
+        }
 
     return _run_action(ctx, node, f"start a new run of {dag_id}", execute, {"dag_id": dag_id})
 
@@ -917,11 +1041,16 @@ def _run_dag(ctx: NodeContext, node: Node) -> NodeResult:
     def execute() -> dict[str, Any]:
         conf = json.loads(cfg["parameters"] or "{}")
         note = f"Started by workflow '{ctx.run.workflow_name}'"
-        run = run_async(
-            lambda: ctx.airflow_adapter(conn).trigger_dag_run(dag_id, note=note, conf=conf)
+        result = _trigger_dag_once(
+            ctx,
+            node_id=node.id,
+            conn=conn,
+            dag_id=dag_id,
+            note=note,
+            conf=conf,
         )
-        ctx.set_context("action_target", {**target, "run_id": run.run_id})
-        return {"dag_id": dag_id, "run_id": run.run_id}
+        ctx.set_context("action_target", {**target, "run_id": result["run_id"]})
+        return {**result, "dag_id": dag_id}
 
     result = _run_action(
         ctx, node, f"run {dag_id}", execute, target, environment=str(conn.environment)

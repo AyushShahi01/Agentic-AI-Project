@@ -62,6 +62,7 @@ class CycleSummary:
     connections: int = 0
     healthy: int = 0
     failing: int = 0
+    skipped: int = 0
     databases_healthy: int = 0
     databases_failing: int = 0
     transitions: list[dict[str, str]] = field(default_factory=list)
@@ -70,6 +71,7 @@ class CycleSummary:
 
 async def _fetch(adapter: AirflowAdapter) -> _Fetch:
     started = time.perf_counter()
+    logger.debug("Polling Airflow DAG list")
     try:
         dags = await adapter.list_dags()
     except AirflowAdapterError as exc:
@@ -168,12 +170,18 @@ def run_cycle(db: Session, *, trigger: str = "schedule", actor: User | None = No
         .where(AirflowConnection.is_active.is_(True))
         .order_by(AirflowConnection.name)
     ).all()
-    adapters, fetches = _adapters(conns)
+    now = utcnow()
+    due = [conn for conn in conns if airflow_service.dag_sync_due(conn, now)]
+    summary.skipped = len(conns) - len(due)
+    adapters, fetches = _adapters(due)
     fetches.update(_fetch_all(adapters))
     finished = utcnow()  # when the answers arrived; slow peers must not look older than they are
 
     for conn in conns:
         summary.connections += 1
+        if str(conn.id) not in fetches:
+            logger.debug("Skipped Airflow polling for %s; DAG state is still fresh", conn.name)
+            continue
         fetch = fetches[str(conn.id)]
         try:
             _record(db, conn, fetch, finished, actor, summary)

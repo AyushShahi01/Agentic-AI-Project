@@ -29,6 +29,9 @@ class Workflow(TimestampMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     key: Mapped[str | None] = mapped_column(String(100), unique=True)  # template key
+    template_key: Mapped[str | None] = mapped_column(String(100))
+    template_version: Mapped[int | None]
+    template_parameters: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(default=False)

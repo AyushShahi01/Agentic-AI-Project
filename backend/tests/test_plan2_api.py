@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.automation.templates import TEMPLATES
+from app.automation.templates import ALL_TEMPLATES
 from app.models.audit_log import AuditLog
 from app.orchestration.airflow import mock as mock_module
 from app.services import automation_service
@@ -59,7 +59,10 @@ def test_catalog_and_templates_are_readable(client: TestClient, viewer_headers: 
     types = client.get(f"{API}/node-types", headers=viewer_headers).json()
     assert {t["type"] for t in types} >= {"trigger.incident", "approval.request", "notify"}
     templates = client.get(f"{API}/templates", headers=viewer_headers).json()
-    assert [t["key"] for t in templates] == [t.key for t in TEMPLATES]
+    assert [t["key"] for t in templates] == [t.key for t in ALL_TEMPLATES]
+    parameterized = next(t for t in templates if t["key"] == "run-verify-dag")
+    assert parameterized["version"] == 1
+    assert "connection_id" in parameterized["parameter_schema"]["properties"]
 
 
 def test_workflow_rbac_and_validation(
@@ -105,6 +108,49 @@ def test_workflow_rbac_and_validation(
         ).status_code
         == 404
     )
+
+    invalid = client.post(
+        f"{API}/workflows",
+        json={"template_key": "run-verify-dag", "template_parameters": {}},
+        headers=admin_headers,
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_template_parameters"
+
+    preview = client.post(
+        f"{API}/templates/run-verify-dag/preview",
+        json={
+            "template_parameters": {
+                "connection_id": "airflow-1",
+                "dag_id": "orders_pipeline",
+            }
+        },
+        headers=viewer_headers,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["valid"]
+    assert {node["type"] for node in preview.json()["graph"]["nodes"]} >= {
+        "pipeline.run_dag",
+        "verify.run_success",
+    }
+
+    created_template = client.post(
+        f"{API}/workflows",
+        json={
+            "template_key": "run-verify-dag",
+            "template_parameters": {
+                "connection_id": "airflow-1",
+                "dag_id": "orders_pipeline",
+            },
+        },
+        headers=admin_headers,
+    )
+    assert created_template.status_code == 201
+    created_body = created_template.json()
+    assert created_body["template_key"] == "run-verify-dag"
+    assert created_body["template_version"] == 1
+    assert created_body["template_parameters"]["dag_id"] == "orders_pipeline"
+    assert created_body["graph"]["nodes"][1]["config"]["dag_id"] == "orders_pipeline"
 
     actions = set(db.scalars(select(AuditLog.action)).all())
     assert {"workflow.update", "workflow.create", "workflow.seed"} <= actions
